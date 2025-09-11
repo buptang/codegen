@@ -51,6 +51,10 @@ pip install pyopenssl cryptography pyDTLS
 - **`dtls_client_pure.py`** - 纯DTLS实现
   - 专门使用pyDTLS库实现真正的DTLS协议
   - 提供文件传输等高级功能
+- **`dtls_client_simple.py`** - 简化版DTLS客户端
+  - 无需pyDTLS库，避免OpenSSL依赖问题
+  - 使用UDP模拟DTLS协议
+  - 适用于有依赖问题的环境
 - **`dtls_server_test.py`** - 增强测试服务器
   - 支持TCP/UDP双模式
   - UDP模式支持真正的DTLS协议
@@ -218,6 +222,28 @@ pip install pyopenssl cryptography pyDTLS
 如果遇到 `value must be an instance of ipaddress.IPv4Address` 错误：
 
 **解决方案**: 已在最新版本中修复，确保使用最新代码。
+
+#### 6. **OpenSSL库缺失错误**
+
+如果遇到 `libcrypto.so.1.1: cannot open shared object file` 错误：
+
+**自动修复**:
+```bash
+python fix_openssl.py
+```
+
+**手动解决方案**:
+```bash
+# Ubuntu/Debian
+sudo apt update
+sudo apt install libssl1.1 libssl-dev
+
+# CentOS/RHEL/Fedora
+sudo yum install compat-openssl11  # 或 sudo dnf install compat-openssl11
+
+# 或者使用简化版本（无需pyDTLS）
+python dtls_client_simple.py
+```
 
 ### 调试模式
 
