@@ -53,11 +53,16 @@ pip install cryptography
 
 ## 文件说明
 
-- **`dtls_client_modern.py`** - 现代DTLS客户端（推荐）
+- **`dtls_client_complete.py`** - 完整DTLS客户端（最推荐）
+  - ✅ 实现完整的DTLS 1.2握手流程
+  - ✅ 包括Client Hello、Certificate交换、Key Exchange
+  - ✅ 真正的RSA密钥协商和AES-128-GCM加密
+  - ✅ 符合RFC 6347 DTLS标准
+- **`dtls_client_modern.py`** - 现代DTLS客户端
   - ✅ 适用于Python 3.x和Ubuntu 22.04
-  - ✅ 使用现代cryptography库实现真正的DTLS协议
+  - ✅ 使用现代cryptography库实现DTLS协议
   - ✅ 支持AES-256-GCM加密
-  - ✅ 无需pyDTLS库，避免兼容性问题
+  - ⚠️ 简化的握手流程
 - **`dtls_client_simple.py`** - 简化版DTLS客户端
   - ✅ 无需任何外部依赖
   - ✅ 使用UDP模拟DTLS协议
@@ -68,6 +73,10 @@ pip install cryptography
 - **`dtls_client_pure.py`** - 纯pyDTLS实现
   - ❌ 仅适用于Python 2.7环境
   - ❌ 不推荐在现代系统中使用
+- **`dtls_server_complete.py`** - 完整DTLS服务器（最推荐）
+  - ✅ 支持完整的DTLS 1.2握手流程
+  - ✅ RSA密钥交换和证书验证
+  - ✅ 真正的加密通信支持
 - **`dtls_server_test.py`** - 增强测试服务器
   - 支持TCP/UDP双模式
   - UDP模式支持真正的DTLS协议
@@ -84,7 +93,16 @@ python dtls_server_test.py
 
 ### 2. 运行DTLS客户端
 
-#### 使用现代DTLS版本（推荐 - Ubuntu 22.04）：
+#### 使用完整DTLS版本（最推荐 - 完整握手）：
+```bash
+# 先启动完整DTLS服务器
+python dtls_server_complete.py
+
+# 然后运行完整DTLS客户端
+python dtls_client_complete.py
+```
+
+#### 使用现代DTLS版本（Ubuntu 22.04）：
 ```bash
 python dtls_client_modern.py
 ```
