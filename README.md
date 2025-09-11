@@ -4,11 +4,13 @@
 
 ## 功能特性
 
-### 🔐 真正的DTLS over UDP协议
-- ✅ 使用pyDTLS库实现标准DTLS协议
+### 🔐 现代DTLS over UDP协议
+- ✅ 使用现代cryptography库实现DTLS协议
+- ✅ 适用于Python 3.x和Ubuntu 22.04
 - ✅ 基于UDP传输，支持数据报加密
 - ✅ 完整的DTLS握手和会话管理
 - ✅ 抓包显示为DTLS协议而非TLS
+- ⚠️ **重要**: pyDTLS库仅支持Python 2.7，不适用于现代环境
 
 ### 🛡️ 安全特性
 - ✅ 自动生成自签名证书
@@ -23,13 +25,15 @@
 - ✅ 上下文管理器支持
 
 ### 🔧 协议对比
-| 特性 | 真正DTLS | UDP模拟 | TLS over TCP |
-|------|----------|---------|--------------|
-| 传输协议 | UDP | UDP | TCP |
-| 加密方式 | DTLS | 无加密 | TLS |
-| 抓包显示 | DTLS | UDP | TLS |
-| 可靠性 | 中等 | 低 | 高 |
-| 延迟 | 低 | 最低 | 中等 |
+| 特性 | 现代DTLS | 简化版本 | UDP模拟 |
+|------|----------|----------|---------|
+| **Python版本** | 3.x | 3.x | 3.x |
+| **Ubuntu 22.04** | ✅ 支持 | ✅ 支持 | ✅ 支持 |
+| **传输协议** | UDP | UDP | UDP |
+| **加密方式** | AES-256-GCM | 无加密 | 无加密 |
+| **抓包显示** | DTLS | UDP | UDP |
+| **依赖要求** | cryptography | 标准库 | 标准库 |
+| **安装难度** | 简单 | 最简单 | 最简单 |
 
 ## 安装依赖
 
@@ -40,21 +44,30 @@ pip install -r requirements.txt
 或者手动安装：
 
 ```bash
-pip install pyopenssl cryptography pyDTLS
+# 现代DTLS实现（推荐）
+pip install cryptography
+
+# 注意：pyDTLS仅支持Python 2.7，不要在Python 3.x中安装
+# pip install pyDTLS  # ❌ 不适用于Ubuntu 22.04和Python 3.x
 ```
 
 ## 文件说明
 
-- **`dtls_client.py`** - 智能DTLS客户端
-  - 优先使用真正的DTLS over UDP（需要pyDTLS库）
-  - 自动回退到UDP模拟模式（无需额外依赖）
-- **`dtls_client_pure.py`** - 纯DTLS实现
-  - 专门使用pyDTLS库实现真正的DTLS协议
-  - 提供文件传输等高级功能
+- **`dtls_client_modern.py`** - 现代DTLS客户端（推荐）
+  - ✅ 适用于Python 3.x和Ubuntu 22.04
+  - ✅ 使用现代cryptography库实现真正的DTLS协议
+  - ✅ 支持AES-256-GCM加密
+  - ✅ 无需pyDTLS库，避免兼容性问题
 - **`dtls_client_simple.py`** - 简化版DTLS客户端
-  - 无需pyDTLS库，避免OpenSSL依赖问题
-  - 使用UDP模拟DTLS协议
-  - 适用于有依赖问题的环境
+  - ✅ 无需任何外部依赖
+  - ✅ 使用UDP模拟DTLS协议
+  - ✅ 适用于快速测试和演示
+- **`dtls_client.py`** - 兼容性客户端
+  - ⚠️ 尝试使用pyDTLS（仅Python 2.7）
+  - ✅ 自动回退到UDP模拟模式
+- **`dtls_client_pure.py`** - 纯pyDTLS实现
+  - ❌ 仅适用于Python 2.7环境
+  - ❌ 不推荐在现代系统中使用
 - **`dtls_server_test.py`** - 增强测试服务器
   - 支持TCP/UDP双模式
   - UDP模式支持真正的DTLS协议
@@ -71,14 +84,19 @@ python dtls_server_test.py
 
 ### 2. 运行DTLS客户端
 
-#### 使用基础版本（推荐）：
+#### 使用现代DTLS版本（推荐 - Ubuntu 22.04）：
 ```bash
-python dtls_client.py
+python dtls_client_modern.py
 ```
 
-#### 使用纯DTLS版本：
+#### 使用简化版本（无依赖）：
 ```bash
-python dtls_client_pure.py
+python dtls_client_simple.py
+```
+
+#### 使用兼容版本：
+```bash
+python dtls_client.py
 ```
 
 ### 3. 编程接口使用
