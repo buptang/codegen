@@ -152,7 +152,56 @@ class DTLSTestServer:
             self.cleanup()
             
     def start_udp_server(self):
-        """启动UDP服务器"""
+        """启动UDP服务器（支持DTLS）"""
+        try:
+            # 尝试使用真正的DTLS
+            if self._start_dtls_server():
+                return
+        except ImportError:
+            logger.warning("pyDTLS库未安装，使用普通UDP模式")
+        except Exception as e:
+            logger.warning(f"DTLS服务器启动失败: {e}，回退到普通UDP模式")
+        
+        # 回退到普通UDP
+        self._start_plain_udp_server()
+    
+    def _start_dtls_server(self):
+        """启动真正的DTLS服务器"""
+        try:
+            from dtls import do_patch
+            from dtls.sslconnection import SSLConnection
+            do_patch()
+        except ImportError:
+            raise ImportError("pyDTLS库未安装")
+        
+        self.generate_server_cert()
+        
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.socket.bind((self.host, self.port))
+        self.running = True
+        
+        logger.info(f"DTLS服务器启动在 {self.host}:{self.port} (真正的DTLS over UDP)")
+        
+        while self.running:
+            try:
+                data, addr = self.socket.recvfrom(4096)
+                
+                # 为每个客户端创建DTLS连接
+                threading.Thread(
+                    target=self._handle_dtls_client,
+                    args=(data, addr),
+                    daemon=True
+                ).start()
+                
+            except Exception as e:
+                if self.running:
+                    logger.error(f"DTLS服务器错误: {e}")
+        
+        return True
+    
+    def _start_plain_udp_server(self):
+        """启动普通UDP服务器"""
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         
@@ -160,7 +209,7 @@ class DTLSTestServer:
             self.socket.bind((self.host, self.port))
             self.running = True
             
-            logger.info(f"UDP测试服务器启动在 {self.host}:{self.port}")
+            logger.info(f"UDP测试服务器启动在 {self.host}:{self.port} (普通UDP模式)")
             
             while self.running:
                 try:
@@ -178,6 +227,81 @@ class DTLSTestServer:
             logger.error(f"UDP服务器错误: {e}")
         finally:
             self.cleanup()
+    
+    def _handle_dtls_client(self, initial_data, addr):
+        """处理DTLS客户端连接"""
+        try:
+            from dtls.sslconnection import SSLConnection
+            
+            # 创建专用的UDP套接字用于此客户端
+            client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            client_socket.bind(('', 0))  # 绑定到任意可用端口
+            client_socket.connect(addr)  # 连接到客户端
+            
+            # 创建DTLS连接
+            dtls_connection = SSLConnection(
+                client_socket,
+                keyfile=self.key_file,
+                certfile=self.cert_file,
+                server_side=True,
+                cert_reqs=0,
+                ssl_version=None,
+                ca_certs=None,
+                do_handshake_on_connect=True,
+                suppress_ragged_eofs=True,
+            )
+            
+            logger.info(f"DTLS客户端连接建立: {addr}")
+            
+            # 处理初始数据
+            if initial_data:
+                self._process_dtls_message(dtls_connection, initial_data, addr)
+            
+            # 持续处理消息
+            while self.running:
+                try:
+                    data = dtls_connection.read(4096)
+                    if data:
+                        self._process_dtls_message(dtls_connection, data, addr)
+                    else:
+                        break
+                except Exception as e:
+                    logger.error(f"DTLS消息处理错误: {e}")
+                    break
+                    
+        except Exception as e:
+            logger.error(f"DTLS客户端处理失败 {addr}: {e}")
+        finally:
+            try:
+                if 'dtls_connection' in locals():
+                    dtls_connection.close()
+                if 'client_socket' in locals():
+                    client_socket.close()
+            except:
+                pass
+            logger.info(f"DTLS客户端 {addr} 连接关闭")
+    
+    def _process_dtls_message(self, dtls_connection, data, addr):
+        """处理DTLS消息"""
+        try:
+            message = data.decode('utf-8')
+            logger.info(f"收到来自 {addr} 的DTLS消息: {message}")
+            
+            # 处理特殊消息
+            if message.startswith("DTLS_CLIENT_HELLO"):
+                response = "DTLS_SERVER_HELLO"
+            elif message.startswith("DTLS_PING") or message.startswith("PING"):
+                response = f"DTLS_PONG {message.split('_', 2)[2] if '_' in message else ''}"
+            elif message.startswith("FILE_TRANSFER"):
+                response = "FILE_TRANSFER_OK"
+            else:
+                response = f"Echo: {message}"
+            
+            dtls_connection.write(response.encode('utf-8'))
+            logger.info(f"DTLS发送给 {addr}: {response}")
+            
+        except Exception as e:
+            logger.error(f"DTLS消息处理失败: {e}")
             
     def handle_tcp_client(self, ssl_socket, addr):
         """处理TCP客户端连接"""
@@ -265,6 +389,18 @@ def main():
     print(f"DTLS测试服务器")
     print(f"模式: {args.mode.upper()}")
     print(f"地址: {args.host}:{args.port}")
+    
+    # 检查pyDTLS库（仅UDP模式需要）
+    if args.mode == 'udp':
+        try:
+            import dtls
+            print("✅ 检测到pyDTLS库 - 将使用真正的DTLS over UDP协议")
+        except ImportError:
+            print("⚠️  pyDTLS库未安装 - 将使用普通UDP模式")
+            print("   安装命令: pip install pyDTLS")
+    else:
+        print("📡 TCP模式 - 使用TLS over TCP协议")
+    
     print("按 Ctrl+C 停止服务器")
     print("=" * 50)
     

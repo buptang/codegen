@@ -4,14 +4,32 @@
 
 ## 功能特性
 
-- ✅ DTLS协议支持（使用pyDTLS库）
+### 🔐 真正的DTLS over UDP协议
+- ✅ 使用pyDTLS库实现标准DTLS协议
+- ✅ 基于UDP传输，支持数据报加密
+- ✅ 完整的DTLS握手和会话管理
+- ✅ 抓包显示为DTLS协议而非TLS
+
+### 🛡️ 安全特性
 - ✅ 自动生成自签名证书
 - ✅ 加密消息传输
+- ✅ 证书验证选项
+
+### 📡 通信功能
 - ✅ 连接测试和ping功能
 - ✅ 交互式会话模式
 - ✅ 文件传输支持
 - ✅ 完整的错误处理和日志记录
 - ✅ 上下文管理器支持
+
+### 🔧 协议对比
+| 特性 | 真正DTLS | UDP模拟 | TLS over TCP |
+|------|----------|---------|--------------|
+| 传输协议 | UDP | UDP | TCP |
+| 加密方式 | DTLS | 无加密 | TLS |
+| 抓包显示 | DTLS | UDP | TLS |
+| 可靠性 | 中等 | 低 | 高 |
+| 延迟 | 低 | 最低 | 中等 |
 
 ## 安装依赖
 
@@ -27,10 +45,17 @@ pip install pyopenssl cryptography pyDTLS
 
 ## 文件说明
 
-- `dtls_client.py` - 基于TLS over TCP的DTLS客户端实现（兼容性更好）
-- `dtls_client_pure.py` - 纯DTLS客户端实现（使用pyDTLS库）
-- `dtls_server_test.py` - 简单的测试服务器
-- `requirements.txt` - 依赖包列表
+- **`dtls_client.py`** - 智能DTLS客户端
+  - 优先使用真正的DTLS over UDP（需要pyDTLS库）
+  - 自动回退到UDP模拟模式（无需额外依赖）
+- **`dtls_client_pure.py`** - 纯DTLS实现
+  - 专门使用pyDTLS库实现真正的DTLS协议
+  - 提供文件传输等高级功能
+- **`dtls_server_test.py`** - 增强测试服务器
+  - 支持TCP/UDP双模式
+  - UDP模式支持真正的DTLS协议
+- **`run_test.py`** - 自动化测试脚本
+- **`requirements.txt`** - 依赖包列表
 
 ## 使用方法
 
