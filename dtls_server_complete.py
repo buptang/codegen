@@ -345,13 +345,52 @@ class DTLSServerSession:
         logger.info("处理Client Hello")
         
         try:
-            # 解析Client Hello
-            if len(data) < 38:
+            # 解析Client Hello - 符合DTLS标准格式
+            if len(data) < 39:  # 最小长度：version(2) + random(32) + session_id_len(1) + cookie_len(1) + cipher_suites_len(2) + compression_len(1)
                 logger.error("Client Hello太短")
                 return
             
-            # 提取客户端随机数
-            self.client_random = data[2:34]
+            offset = 0
+            
+            # 协议版本 (2 bytes)
+            version = struct.unpack('!H', data[offset:offset+2])[0]
+            offset += 2
+            logger.debug(f"协议版本: 0x{version:04x}")
+            
+            # 客户端随机数 (32 bytes)
+            self.client_random = data[offset:offset+32]
+            offset += 32
+            logger.debug(f"客户端随机数: {self.client_random.hex()}")
+            
+            # Session ID长度和内容
+            session_id_length = data[offset]
+            offset += 1
+            if session_id_length > 0:
+                session_id = data[offset:offset+session_id_length]
+                offset += session_id_length
+                logger.debug(f"Session ID: {session_id.hex()}")
+            
+            # Cookie长度和内容 (DTLS特有)
+            cookie_length = data[offset]
+            offset += 1
+            if cookie_length > 0:
+                cookie = data[offset:offset+cookie_length]
+                offset += cookie_length
+                logger.debug(f"Cookie: {cookie.hex()}")
+            
+            # 密码套件
+            if offset + 2 > len(data):
+                logger.error("数据不足以读取密码套件长度")
+                return
+            cipher_suites_length = struct.unpack('!H', data[offset:offset+2])[0]
+            offset += 2
+            
+            if offset + cipher_suites_length > len(data):
+                logger.error("数据不足以读取密码套件")
+                return
+            cipher_suites = data[offset:offset+cipher_suites_length]
+            offset += cipher_suites_length
+            logger.debug(f"密码套件: {cipher_suites.hex()}")
             
             # 生成服务器随机数
             self.server_random = secrets.token_bytes(32)

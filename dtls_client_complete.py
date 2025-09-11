@@ -219,27 +219,39 @@ class CompleteDTLSClient:
         # 生成客户端随机数
         self.client_random = secrets.token_bytes(32)
         
-        # 构造Client Hello
-        version = struct.pack('!H', DTLSConstants.DTLS_1_2)
-        random = self.client_random
-        session_id_length = b'\x00'  # 无会话ID
+        # 构造Client Hello - 符合DTLS标准格式
+        version = struct.pack('!H', DTLSConstants.DTLS_1_2)  # DTLS 1.2 = 0xFEFD
+        random = self.client_random  # 32字节随机数
+        
+        # Session ID
+        session_id_length = struct.pack('!B', 0)  # 无会话ID
         session_id = b''
         
+        # Cookie (DTLS特有字段)
+        cookie_length = struct.pack('!B', 0)  # 初始Client Hello无Cookie
+        cookie = b''
+        
         # 密码套件列表
-        cipher_suites = struct.pack('!HH', 
-                                  2,  # 长度
-                                  DTLSConstants.TLS_RSA_WITH_AES_128_GCM_SHA256)
+        cipher_suites_length = struct.pack('!H', 2)  # 1个密码套件 = 2字节
+        cipher_suite = struct.pack('!H', DTLSConstants.TLS_RSA_WITH_AES_128_GCM_SHA256)
+        cipher_suites = cipher_suites_length + cipher_suite
         
         # 压缩方法
-        compression_methods = struct.pack('!BB', 1, DTLSConstants.COMPRESSION_NULL)
+        compression_methods_length = struct.pack('!B', 1)  # 1个压缩方法
+        compression_method = struct.pack('!B', DTLSConstants.COMPRESSION_NULL)
+        compression_methods = compression_methods_length + compression_method
         
         # 扩展（暂时为空）
         extensions_length = struct.pack('!H', 0)
         extensions = b''
         
+        # 按照DTLS标准顺序组装Client Hello
         client_hello_data = (version + random + session_id_length + session_id + 
-                           cipher_suites + compression_methods + 
-                           extensions_length + extensions)
+                           cookie_length + cookie + cipher_suites + 
+                           compression_methods + extensions_length + extensions)
+        
+        logger.info(f"Client Hello数据长度: {len(client_hello_data)} 字节")
+        logger.debug(f"Client Hello数据: {client_hello_data.hex()}")
         
         return self.handshake_layer.create_handshake_message(
             DTLSConstants.CLIENT_HELLO, client_hello_data)
