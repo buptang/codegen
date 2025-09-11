@@ -81,12 +81,10 @@ class DTLSRecord:
         length = len(data)
         
         # DTLS记录格式: type(1) + version(2) + epoch(2) + sequence(6) + length(2) + data
-        record = struct.pack('!BHHQH', 
-                           content_type, 
-                           version, 
-                           self.epoch, 
-                           self.sequence_number, 
-                           length) + data
+        record = (struct.pack('!BHH', content_type, version, self.epoch) +
+                 struct.pack('!Q', self.sequence_number)[2:] +  # 6字节序列号
+                 struct.pack('!H', length) + 
+                 data)
         
         self.sequence_number += 1
         return record
@@ -96,7 +94,11 @@ class DTLSRecord:
         if len(data) < 13:
             raise ValueError("记录太短")
         
-        content_type, version, epoch, sequence, length = struct.unpack('!BHHQH', data[:13])
+        content_type = data[0]
+        version = struct.unpack('!H', data[1:3])[0]
+        epoch = struct.unpack('!H', data[3:5])[0]
+        sequence = int.from_bytes(data[5:11], 'big')  # 6字节序列号
+        length = struct.unpack('!H', data[11:13])[0]
         payload = data[13:13+length]
         
         return content_type, payload
@@ -114,12 +116,13 @@ class DTLSHandshake:
         length = len(data)
         
         # 握手消息格式: type(1) + length(3) + message_seq(2) + fragment_offset(3) + fragment_length(3) + data
-        message = struct.pack('!BLHHBH', 
-                            msg_type, 
-                            length, 
-                            self.message_sequence, 
-                            0,  # fragment_offset
-                            length) + data  # fragment_length = length
+        # 使用正确的DTLS握手消息格式
+        message = (struct.pack("!B", msg_type) + 
+                  struct.pack("!I", length)[1:] +  # 3字节长度
+                  struct.pack("!H", self.message_sequence) +
+                  struct.pack("!I", 0)[1:] +  # 3字节fragment_offset
+                  struct.pack("!I", length)[1:] +  # 3字节fragment_length
+                  data)
         
         self.message_sequence += 1
         self.handshake_messages.append(message)
@@ -131,7 +134,12 @@ class DTLSHandshake:
         if len(data) < 12:
             raise ValueError("握手消息太短")
         
-        msg_type, length, msg_seq, frag_offset, frag_length = struct.unpack('!BLHHBH', data[:12])
+        # 正确解析DTLS握手消息格式
+        msg_type = data[0]
+        length = int.from_bytes(data[1:4], 'big')
+        msg_seq = int.from_bytes(data[4:6], 'big')
+        frag_offset = int.from_bytes(data[6:9], 'big')
+        frag_length = int.from_bytes(data[9:12], 'big')
         payload = data[12:12+frag_length]
         
         return msg_type, payload
@@ -633,6 +641,50 @@ class CompleteDTLSClient:
             'client_write_key_length': len(self.client_write_key) if self.client_write_key else 0
         }
     
+    def send_application_data(self, data: bytes) -> bool:
+        """发送应用数据"""
+        if not self.connected:
+            logger.error("未连接到服务器")
+            return False
+        
+        try:
+            # 创建应用数据记录
+            app_record = self.record_layer.create_record(DTLSConstants.APPLICATION_DATA, data)
+            self.socket.sendto(app_record, (self.server_host, self.server_port))
+            logger.info(f"发送应用数据: {len(data)} 字节")
+            return True
+        except Exception as e:
+            logger.error(f"发送应用数据失败: {e}")
+            return False
+    
+    def receive_application_data(self, timeout: float = 5.0) -> Optional[bytes]:
+        """接收应用数据"""
+        if not self.connected:
+            logger.error("未连接到服务器")
+            return None
+        
+        try:
+            self.socket.settimeout(timeout)
+            data, addr = self.socket.recvfrom(4096)
+            
+            # 解析DTLS记录
+            content_type, payload = self.record_layer.parse_record(data)
+            
+            if content_type == DTLSConstants.APPLICATION_DATA:
+                logger.info(f"收到应用数据: {len(payload)} 字节")
+                return payload
+            else:
+                logger.warning(f"收到非应用数据: 类型={content_type}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"接收应用数据失败: {e}")
+            return None
+    
+    def close(self):
+        """关闭连接"""
+        self.cleanup()
+    
     def cleanup(self):
         """清理资源"""
         self.connected = False
@@ -700,4 +752,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

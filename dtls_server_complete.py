@@ -25,7 +25,37 @@ import ipaddress
 import secrets
 
 # 重用客户端的常量定义
-from dtls_client_complete import DTLSConstants, DTLSRecord, DTLSHandshake
+# 移除循环导入
+
+
+class DTLSConstants:
+    # 内容类型
+    CHANGE_CIPHER_SPEC = 20
+    ALERT = 21
+    HANDSHAKE = 22
+    APPLICATION_DATA = 23
+    
+    # DTLS版本
+    DTLS_1_2 = 0xFEFD
+    
+    # 握手消息类型
+    CLIENT_HELLO = 1
+    SERVER_HELLO = 2
+    CERTIFICATE = 11
+    SERVER_KEY_EXCHANGE = 12
+    CERTIFICATE_REQUEST = 13
+    SERVER_HELLO_DONE = 14
+    CERTIFICATE_VERIFY = 15
+    CLIENT_KEY_EXCHANGE = 16
+    FINISHED = 20
+    
+    # 密码套件
+    TLS_RSA_WITH_AES_128_GCM_SHA256 = 0x009C
+    TLS_RSA_WITH_AES_256_GCM_SHA384 = 0x009D
+    
+    # 压缩方法
+    COMPRESSION_NULL = 0
+
 
 # 配置日志
 logging.basicConfig(
@@ -33,6 +63,83 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+class DTLSRecord:
+    """DTLS记录层"""
+    
+    def __init__(self):
+        self.sequence_number = 0
+        self.epoch = 0
+    
+    def create_record(self, content_type: int, data: bytes) -> bytes:
+        """创建DTLS记录"""
+        version = DTLSConstants.DTLS_1_2
+        length = len(data)
+        
+        # DTLS记录格式: type(1) + version(2) + epoch(2) + sequence(6) + length(2) + data
+        record = (struct.pack('!BHH', content_type, version, self.epoch) +
+                 struct.pack('!Q', self.sequence_number)[2:] +  # 6字节序列号
+                 struct.pack('!H', length) + 
+                 data)
+        
+        self.sequence_number += 1
+        return record
+    
+    def parse_record(self, data: bytes) -> Tuple[int, bytes]:
+        """解析DTLS记录"""
+        if len(data) < 13:
+            raise ValueError("记录太短")
+        
+        content_type = data[0]
+        version = struct.unpack('!H', data[1:3])[0]
+        epoch = struct.unpack('!H', data[3:5])[0]
+        sequence = int.from_bytes(data[5:11], 'big')  # 6字节序列号
+        length = struct.unpack('!H', data[11:13])[0]
+        payload = data[13:13+length]
+        
+        return content_type, payload
+
+
+class DTLSHandshake:
+    """DTLS握手层"""
+    
+    def __init__(self):
+        self.message_sequence = 0
+        self.handshake_messages = []  # 用于计算Finished消息
+    
+    def create_handshake_message(self, msg_type: int, data: bytes) -> bytes:
+        """创建握手消息"""
+        length = len(data)
+        
+        # 握手消息格式: type(1) + length(3) + message_seq(2) + fragment_offset(3) + fragment_length(3) + data
+        # 使用正确的DTLS握手消息格式
+        message = (struct.pack("!B", msg_type) + 
+                  struct.pack("!I", length)[1:] +  # 3字节长度
+                  struct.pack("!H", self.message_sequence) +
+                  struct.pack("!I", 0)[1:] +  # 3字节fragment_offset
+                  struct.pack("!I", length)[1:] +  # 3字节fragment_length
+                  data)
+        
+        self.message_sequence += 1
+        self.handshake_messages.append(message)
+        
+        return message
+    
+    def parse_handshake_message(self, data: bytes) -> Tuple[int, bytes]:
+        """解析握手消息"""
+        if len(data) < 12:
+            raise ValueError("握手消息太短")
+        
+        # 正确解析DTLS握手消息格式
+        msg_type = data[0]
+        length = int.from_bytes(data[1:4], 'big')
+        msg_seq = int.from_bytes(data[4:6], 'big')
+        frag_offset = int.from_bytes(data[6:9], 'big')
+        frag_length = int.from_bytes(data[9:12], 'big')
+        payload = data[12:12+frag_length]
+        
+        return msg_type, payload
 
 
 class CompleteDTLSServer:
@@ -152,6 +259,10 @@ class CompleteDTLSServer:
             logger.error(f"客户端处理失败 {client_addr}: {e}")
         finally:
             logger.info(f"客户端 {client_addr} 连接关闭")
+    
+    def stop(self):
+        """停止服务器"""
+        self.cleanup()
     
     def cleanup(self):
         """清理资源"""
