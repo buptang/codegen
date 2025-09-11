@@ -120,20 +120,79 @@ context = client.setup_ssl_context(verify_mode=ssl.CERT_REQUIRED)
 
 ## 故障排除
 
+### 快速测试
+
+使用自动测试脚本：
+
+```bash
+python run_test.py
+```
+
+这个脚本会：
+- ✅ 自动检查依赖文件
+- ✅ 找到可用端口
+- ✅ 启动测试服务器
+- ✅ 测试客户端连接
+- ✅ 提供详细的错误信息
+
 ### 常见问题
 
-1. **连接失败**
-   - 检查服务器是否运行
-   - 确认端口号正确
-   - 检查防火墙设置
+#### 1. **[Errno 111] Connection refused**
 
-2. **证书错误**
-   - 删除旧的证书文件重新生成
-   - 检查证书权限
+**原因**: 没有DTLS服务器在运行
 
-3. **依赖问题**
-   - 确保所有依赖包已正确安装
-   - 检查Python版本兼容性
+**解决方案**:
+```bash
+# 方法1: 使用自动测试
+python run_test.py
+
+# 方法2: 手动启动服务器
+# 终端1: 启动服务器
+python dtls_server_test.py
+
+# 终端2: 运行客户端
+python dtls_client.py
+```
+
+#### 2. **端口被占用**
+
+**解决方案**:
+```bash
+# 使用不同端口启动服务器
+python dtls_server_test.py --port 5433
+
+# 或者找到占用端口的进程
+lsof -i :4433  # Linux/Mac
+netstat -ano | findstr :4433  # Windows
+```
+
+#### 3. **证书错误**
+
+**解决方案**:
+```bash
+# 删除旧证书文件
+rm *.pem
+
+# 重新运行程序，会自动生成新证书
+python dtls_client.py
+```
+
+#### 4. **依赖问题**
+
+**解决方案**:
+```bash
+# 安装所有依赖
+pip install -r requirements.txt
+
+# 或者单独安装
+pip install pyopenssl cryptography pyDTLS
+```
+
+#### 5. **IP地址格式错误**
+
+如果遇到 `value must be an instance of ipaddress.IPv4Address` 错误：
+
+**解决方案**: 已在最新版本中修复，确保使用最新代码。
 
 ### 调试模式
 
@@ -142,6 +201,44 @@ context = client.setup_ssl_context(verify_mode=ssl.CERT_REQUIRED)
 ```python
 import logging
 logging.basicConfig(level=logging.DEBUG)
+```
+
+### 手动测试步骤
+
+1. **启动服务器**:
+```bash
+# TCP模式（推荐）
+python dtls_server_test.py --mode tcp --port 4433
+
+# UDP模式
+python dtls_server_test.py --mode udp --port 4433
+```
+
+2. **运行客户端**:
+```bash
+# 基础版本
+python dtls_client.py
+
+# 纯DTLS版本
+python dtls_client_pure.py
+```
+
+3. **验证连接**:
+   - 查看服务器日志确认连接建立
+   - 在客户端发送测试消息
+   - 确认消息正确传输
+
+### 网络诊断
+
+```bash
+# 检查端口是否开放
+telnet localhost 4433
+
+# 检查进程是否运行
+ps aux | grep dtls
+
+# 检查网络连接
+netstat -tlnp | grep 4433
 ```
 
 ## 示例场景
