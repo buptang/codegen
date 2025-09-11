@@ -14,6 +14,7 @@ import socket
 import ssl
 import time
 import threading
+import ipaddress
 from typing import Optional, Tuple, Dict, Any
 import logging
 from cryptography import x509
@@ -87,7 +88,7 @@ class DTLSClient:
         ).add_extension(
             x509.SubjectAlternativeName([
                 x509.DNSName("localhost"),
-                x509.IPAddress(socket.inet_aton("127.0.0.1")),
+                x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
             ]),
             critical=False,
         ).sign(private_key, hashes.SHA256())
