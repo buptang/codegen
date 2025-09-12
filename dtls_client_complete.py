@@ -697,21 +697,42 @@ class CompleteDTLSClient:
                 logger.debug(f"公钥数据前16字节: {pubkey_data[:16].hex()}")
                 offset += pubkey_length
                 
-                # 解析签名算法 (2字节)
-                if offset + 2 > len(data):
-                    logger.error(f"无法读取签名算法，需要 {offset + 2} 字节，但只有 {len(data)} 字节")
-                    return False
-                signature_algorithm = struct.unpack('!H', data[offset:offset+2])[0]
-                logger.info(f"偏移量 {offset}: 签名算法 = 0x{signature_algorithm:04x}")
-                offset += 2
+                # 尝试解析签名算法和签名长度
+                # 有些服务器实现可能没有签名算法字段，直接是签名长度
+                signature_algorithm = None
                 
-                # 解析签名长度 (2字节)
-                if offset + 2 > len(data):
-                    logger.error(f"无法读取签名长度，需要 {offset + 2} 字节，但只有 {len(data)} 字节")
+                if offset + 4 <= len(data):
+                    # 尝试读取可能的签名算法字段
+                    possible_sig_alg = struct.unpack('!H', data[offset:offset+2])[0]
+                    possible_sig_len = struct.unpack('!H', data[offset+2:offset+4])[0]
+                    
+                    # 判断是否有签名算法字段
+                    # 如果第一个2字节值看起来像签名算法(常见值0x0401-0x0806)，且第二个值是合理的签名长度
+                    if (0x0401 <= possible_sig_alg <= 0x0806 and 
+                        64 <= possible_sig_len <= 1024 and 
+                        offset + 4 + possible_sig_len <= len(data)):
+                        # 有签名算法字段的格式
+                        signature_algorithm = possible_sig_alg
+                        signature_length = possible_sig_len
+                        logger.info(f"偏移量 {offset}: 签名算法 = 0x{signature_algorithm:04x}")
+                        offset += 2
+                        logger.info(f"偏移量 {offset}: 签名长度 = {signature_length}")
+                        offset += 2
+                    else:
+                        # 没有签名算法字段，直接是签名长度
+                        signature_length = possible_sig_alg  # 第一个2字节实际是签名长度
+                        logger.info(f"偏移量 {offset}: 没有签名算法字段")
+                        logger.info(f"偏移量 {offset}: 签名长度 = {signature_length}")
+                        offset += 2
+                elif offset + 2 <= len(data):
+                    # 只能读取2字节，假设是签名长度
+                    signature_length = struct.unpack('!H', data[offset:offset+2])[0]
+                    logger.info(f"偏移量 {offset}: 没有签名算法字段")
+                    logger.info(f"偏移量 {offset}: 签名长度 = {signature_length}")
+                    offset += 2
+                else:
+                    logger.error(f"无法读取签名长度，需要至少 {offset + 2} 字节，但只有 {len(data)} 字节")
                     return False
-                signature_length = struct.unpack('!H', data[offset:offset+2])[0]
-                logger.info(f"偏移量 {offset}: 签名长度 = {signature_length}")
-                offset += 2
                 
                 # 验证签名长度合理性
                 if signature_length == 0 or signature_length > 1024:
@@ -743,7 +764,10 @@ class CompleteDTLSClient:
                 logger.info(f"  曲线类型: {curve_type}")
                 logger.info(f"  命名曲线: {named_curve}")
                 logger.info(f"  公钥长度: {pubkey_length}")
-                logger.info(f"  签名算法: 0x{signature_algorithm:04x}")
+                if signature_algorithm is not None:
+                    logger.info(f"  签名算法: 0x{signature_algorithm:04x}")
+                else:
+                    logger.info(f"  签名算法: 无 (服务器未提供)")
                 logger.info(f"  签名长度: {signature_length}")
                 logger.info(f"  实际签名数据长度: {len(signature_data)}")
                 
