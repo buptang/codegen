@@ -20,11 +20,12 @@ import hashlib
 import hmac
 import os
 import logging
+import secrets
 from typing import Optional, Dict, Any, Tuple, List
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives.asymmetric import rsa, padding, ec
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 import datetime
@@ -221,6 +222,10 @@ class CompleteDTLSClient:
         
         # 服务器临时公钥信息 (用于ECDHE)
         self.server_temp_public_key = None
+        
+        # 客户端ECDH密钥对 (用于ECDHE)
+        self.client_ecdh_private_key = None
+        self.client_ecdh_public_key = None
         
         # 加密状态
         self.encryption_enabled = False
@@ -672,7 +677,69 @@ class CompleteDTLSClient:
             logger.error(f"解析Server Key Exchange失败: {e}")
             return False
     def create_client_key_exchange(self) -> bytes:
-        """创建Client Key Exchange消息"""
+        """创建Client Key Exchange消息 (使用ECDH)"""
+        if self.server_temp_public_key:
+            # ECDHE模式：使用椭圆曲线Diffie-Hellman
+            return self._create_ecdh_client_key_exchange()
+        else:
+            # RSA模式：传统RSA密钥交换
+            return self._create_rsa_client_key_exchange()
+    
+    def _create_ecdh_client_key_exchange(self) -> bytes:
+        """创建ECDH Client Key Exchange消息"""
+        try:
+            # 根据服务器的椭圆曲线生成客户端密钥对
+            named_curve = self.server_temp_public_key['named_curve']
+            
+            # 映射命名曲线到cryptography的椭圆曲线
+            curve_map = {
+                23: ec.SECP256R1(),  # secp256r1
+                24: ec.SECP384R1(),  # secp384r1
+                25: ec.SECP521R1(),  # secp521r1
+            }
+            
+            if named_curve not in curve_map:
+                logger.error(f"不支持的椭圆曲线: {named_curve}")
+                return b''
+            
+            curve = curve_map[named_curve]
+            
+            # 生成客户端ECDH密钥对
+            self.client_ecdh_private_key = ec.generate_private_key(curve)
+            self.client_ecdh_public_key = self.client_ecdh_private_key.public_key()
+            
+            # 序列化客户端公钥
+            client_public_key_bytes = self.client_ecdh_public_key.public_numbers().x.to_bytes(
+                (curve.key_size + 7) // 8, 'big'
+            ) + self.client_ecdh_public_key.public_numbers().y.to_bytes(
+                (curve.key_size + 7) // 8, 'big'
+            )
+            
+            # 添加未压缩点格式标识符
+            client_public_key_data = b'\x04' + client_public_key_bytes
+            
+            # 执行ECDH计算生成预主密钥
+            server_public_key_data = self.server_temp_public_key['public_key']
+            server_public_key = self._reconstruct_server_public_key(server_public_key_data, curve)
+            
+            # 计算共享密钥
+            shared_key = self.client_ecdh_private_key.exchange(ec.ECDH(), server_public_key)
+            self.pre_master_secret = shared_key
+            
+            logger.info(f"ECDH密钥交换完成，预主密钥长度: {len(self.pre_master_secret)}")
+            
+            # Client Key Exchange消息格式: length(1) + public_key_data
+            key_exchange_data = struct.pack('!B', len(client_public_key_data)) + client_public_key_data
+            
+            return self.handshake_layer.create_handshake_message(
+                DTLSConstants.CLIENT_KEY_EXCHANGE, key_exchange_data)
+                
+        except Exception as e:
+            logger.error(f"创建ECDH Client Key Exchange失败: {e}")
+            return b''
+    
+    def _create_rsa_client_key_exchange(self) -> bytes:
+        """创建RSA Client Key Exchange消息"""
         # 生成预主密钥 (48字节)
         self.pre_master_secret = (struct.pack('!H', DTLSConstants.DTLS_1_0) + 
                                 secrets.token_bytes(46))
@@ -693,6 +760,73 @@ class CompleteDTLSClient:
         
         return self.handshake_layer.create_handshake_message(
             DTLSConstants.CLIENT_KEY_EXCHANGE, key_exchange_data)
+    
+    def _reconstruct_server_public_key(self, public_key_data: bytes, curve) -> ec.EllipticCurvePublicKey:
+        """从服务器公钥数据重构椭圆曲线公钥"""
+        if len(public_key_data) == 0 or public_key_data[0] != 0x04:
+            raise ValueError("无效的椭圆曲线公钥格式")
+        
+        # 去掉未压缩点格式标识符
+        key_data = public_key_data[1:]
+        
+        # 计算坐标长度
+        coord_length = len(key_data) // 2
+        
+        # 提取x和y坐标
+        x = int.from_bytes(key_data[:coord_length], 'big')
+        y = int.from_bytes(key_data[coord_length:], 'big')
+        
+        # 创建公钥
+        public_numbers = ec.EllipticCurvePublicNumbers(x, y, curve)
+        return public_numbers.public_key()
+    
+    def create_bundled_client_messages(self) -> bytes:
+        """创建合并的客户端消息包 (Client Key Exchange + Change Cipher Spec + Finished)"""
+        try:
+            # 1. 创建Client Key Exchange消息
+            client_key_exchange = self.create_client_key_exchange()
+            if not client_key_exchange:
+                logger.error("创建Client Key Exchange失败")
+                return b''
+            
+            # 派生主密钥和会话密钥
+            self.derive_master_secret()
+            self.derive_key_material()
+            
+            # 2. 创建Change Cipher Spec消息
+            change_cipher_spec = struct.pack('!B', 1)
+            change_cipher_spec_record = self.record_layer.create_record(
+                DTLSConstants.CHANGE_CIPHER_SPEC, change_cipher_spec)
+            
+            # 3. 创建Finished消息
+            finished = self.create_finished_message()
+            if not finished:
+                logger.error("创建Finished消息失败")
+                return b''
+            
+            # 将Client Key Exchange包装为记录
+            client_key_exchange_record = self.record_layer.create_record(
+                DTLSConstants.HANDSHAKE, client_key_exchange)
+            
+            # 将Finished消息包装为记录
+            finished_record = self.record_layer.create_record(
+                DTLSConstants.HANDSHAKE, finished)
+            
+            # 合并所有消息到一个数据包
+            bundled_message = (client_key_exchange_record + 
+                             change_cipher_spec_record + 
+                             finished_record)
+            
+            logger.info(f"创建合并消息包成功，总长度: {len(bundled_message)} 字节")
+            logger.info(f"- Client Key Exchange: {len(client_key_exchange_record)} 字节")
+            logger.info(f"- Change Cipher Spec: {len(change_cipher_spec_record)} 字节") 
+            logger.info(f"- Finished: {len(finished_record)} 字节")
+            
+            return bundled_message
+            
+        except Exception as e:
+            logger.error(f"创建合并消息包失败: {e}")
+            return b''
     
     def derive_master_secret(self):
         """派生主密钥"""
@@ -925,30 +1059,17 @@ class CompleteDTLSClient:
                     logger.info("握手消息接收超时，继续处理")
                     break
             
-            # 6. 一次性发送客户端握手消息
-            logger.info("6. 发送客户端握手消息 (Client Key Exchange + Change Cipher Spec + Finished)")
+            # 6. 一次性发送合并的客户端握手消息
+            logger.info("6. 发送合并的客户端握手消息 (Client Key Exchange + Change Cipher Spec + Finished)")
             
-            # 6a. 创建Client Key Exchange
-            client_key_exchange = self.create_client_key_exchange()
-            if client_key_exchange:
-                client_key_exchange_record = self.record_layer.create_record(
-                    DTLSConstants.HANDSHAKE, client_key_exchange)
-                self.socket.send(client_key_exchange_record)
-                logger.info("发送Client Key Exchange")
-            
-            # 6b. 发送Change Cipher Spec
-            change_cipher_spec = struct.pack('!B', 1)
-            change_cipher_spec_record = self.record_layer.create_record(
-                DTLSConstants.CHANGE_CIPHER_SPEC, change_cipher_spec)
-            self.socket.send(change_cipher_spec_record)
-            logger.info("发送Change Cipher Spec")
-            
-            # 6c. 发送Encrypted Handshake Message (Finished)
-            finished = self.create_finished_message()
-            finished_record = self.record_layer.create_record(
-                DTLSConstants.HANDSHAKE, finished)
-            self.socket.send(finished_record)
-            logger.info("发送Encrypted Handshake Message (Finished)")
+            # 创建并发送合并的消息包
+            bundled_messages = self.create_bundled_client_messages()
+            if bundled_messages:
+                self.socket.send(bundled_messages)
+                logger.info("✅ 成功发送合并的客户端消息包")
+            else:
+                logger.error("❌ 创建合并消息包失败")
+                return False
             # 10. 接收Change Cipher Spec
             logger.info("10. 等待Change Cipher Spec")
             try:
