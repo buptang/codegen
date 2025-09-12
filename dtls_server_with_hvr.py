@@ -43,7 +43,7 @@ class DTLSConstants:
     APPLICATION_DATA = 23
     
     # DTLS版本
-    DTLS_1_2 = 0xFEFD
+    DTLS_1_0 = 0xFEFF  # DTLS 1.0版本
     
     # 握手消息类型
     CLIENT_HELLO = 1
@@ -63,6 +63,12 @@ class DTLSConstants:
     
     # 压缩方法
     COMPRESSION_NULL = 0
+    
+    # TLS扩展类型
+    EXTENSION_SERVER_NAME = 0x0000  # SNI扩展
+    
+    # SNI名称类型
+    SNI_NAME_TYPE_HOSTNAME = 0x00
 
 
 class DTLSRecord:
@@ -74,7 +80,7 @@ class DTLSRecord:
     
     def create_record(self, content_type: int, data: bytes) -> bytes:
         """创建DTLS记录"""
-        version = DTLSConstants.DTLS_1_2
+        version = DTLSConstants.DTLS_1_0
         epoch = struct.pack('!H', self.epoch)
         sequence_number = struct.pack('!Q', self.sequence_number)[2:]  # 6字节
         length = len(data)
@@ -225,7 +231,7 @@ class DTLSServer:
     def create_hello_verify_request(self, client_addr: Tuple[str, int], client_random: bytes) -> bytes:
         """创建Hello Verify Request消息"""
         # 协议版本
-        version = struct.pack('!H', DTLSConstants.DTLS_1_2)
+        version = struct.pack('!H', DTLSConstants.DTLS_1_0)
         
         # 生成Cookie
         cookie = self.generate_cookie(client_addr, client_random)
@@ -316,10 +322,27 @@ class DTLSServer:
             offset += compression_methods_length
             result['compression_methods'] = list(compression_methods)
             
+            # 解析扩展（如果存在）
+            extensions = {}
+            if offset < len(data):
+                # 扩展长度
+                if offset + 2 <= len(data):
+                    extensions_length = struct.unpack('!H', data[offset:offset+2])[0]
+                    offset += 2
+                    
+                    if offset + extensions_length <= len(data):
+                        extensions_data = data[offset:offset+extensions_length]
+                        extensions = self.parse_extensions(extensions_data)
+                        logger.info(f"解析到扩展: {list(extensions.keys())}")
+            
+            result['extensions'] = extensions
+            
             logger.info(f"解析Client Hello成功:")
             logger.info(f"  版本: 0x{version:04x}")
             logger.info(f"  Cookie长度: {len(cookie)}")
             logger.info(f"  密码套件: {[hex(s) for s in cipher_suites]}")
+            if 'server_name' in extensions:
+                logger.info(f"  SNI服务器名称: {extensions['server_name']}")
             
             return result
             
@@ -327,10 +350,67 @@ class DTLSServer:
             logger.error(f"解析Client Hello失败: {e}")
             return None
     
+    def parse_extensions(self, extensions_data: bytes) -> Dict[str, Any]:
+        """解析TLS扩展"""
+        extensions = {}
+        offset = 0
+        
+        while offset < len(extensions_data):
+            if offset + 4 > len(extensions_data):
+                break
+                
+            # 扩展类型和长度
+            ext_type = struct.unpack('!H', extensions_data[offset:offset+2])[0]
+            ext_length = struct.unpack('!H', extensions_data[offset+2:offset+4])[0]
+            offset += 4
+            
+            if offset + ext_length > len(extensions_data):
+                break
+                
+            ext_data = extensions_data[offset:offset+ext_length]
+            offset += ext_length
+            
+            # 解析SNI扩展
+            if ext_type == DTLSConstants.EXTENSION_SERVER_NAME:
+                server_name = self.parse_sni_extension(ext_data)
+                if server_name:
+                    extensions['server_name'] = server_name
+                    logger.info(f"解析SNI扩展: {server_name}")
+        
+        return extensions
+    
+    def parse_sni_extension(self, ext_data: bytes) -> str:
+        """解析SNI扩展数据"""
+        try:
+            if len(ext_data) < 2:
+                return None
+                
+            # 服务器名称列表长度
+            name_list_length = struct.unpack('!H', ext_data[0:2])[0]
+            offset = 2
+            
+            if offset + name_list_length > len(ext_data):
+                return None
+                
+            # 解析第一个服务器名称
+            if offset + 3 <= len(ext_data):
+                name_type = ext_data[offset]
+                name_length = struct.unpack('!H', ext_data[offset+1:offset+3])[0]
+                offset += 3
+                
+                if name_type == DTLSConstants.SNI_NAME_TYPE_HOSTNAME and offset + name_length <= len(ext_data):
+                    server_name = ext_data[offset:offset+name_length].decode('utf-8')
+                    return server_name
+                    
+        except Exception as e:
+            logger.error(f"解析SNI扩展失败: {e}")
+            
+        return None
+    
     def create_server_hello(self, client_hello: Dict[str, Any]) -> bytes:
         """创建Server Hello消息"""
         # 协议版本
-        version = struct.pack('!H', DTLSConstants.DTLS_1_2)
+        version = struct.pack('!H', DTLSConstants.DTLS_1_0)
         
         # 服务器随机数
         server_random = secrets.token_bytes(32)
@@ -513,4 +593,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

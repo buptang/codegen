@@ -47,7 +47,7 @@ class DTLSConstants:
     APPLICATION_DATA = 23
     
     # DTLS版本
-    DTLS_1_2 = 0xFEFD
+    DTLS_1_0 = 0xFEFF  # DTLS 1.0版本
     
     # 握手消息类型
     CLIENT_HELLO = 1
@@ -67,6 +67,12 @@ class DTLSConstants:
     
     # 压缩方法
     COMPRESSION_NULL = 0
+    
+    # TLS扩展类型
+    EXTENSION_SERVER_NAME = 0x0000  # SNI扩展
+    
+    # SNI名称类型
+    SNI_NAME_TYPE_HOSTNAME = 0x00
 
 
 class DTLSRecord:
@@ -78,7 +84,7 @@ class DTLSRecord:
     
     def create_record(self, content_type: int, data: bytes) -> bytes:
         """创建DTLS记录"""
-        version = DTLSConstants.DTLS_1_2
+        version = DTLSConstants.DTLS_1_0
         length = len(data)
         
         # DTLS记录格式: type(1) + version(2) + epoch(2) + sequence(6) + length(2) + data
@@ -149,10 +155,11 @@ class DTLSHandshake:
 class CompleteDTLSClient:
     """完整的DTLS客户端实现"""
     
-    def __init__(self, server_host: str = 'localhost', server_port: int = 4433):
+    def __init__(self, server_host: str = 'localhost', server_port: int = 4433, server_name: str = None):
         self.server_host = server_host
         self.server_port = server_port
         self.socket = None
+        self.server_name = server_name or server_host  # SNI服务器名称，默认使用server_host
         self.connected = False
         
         # DTLS组件
@@ -216,13 +223,46 @@ class CompleteDTLSClient:
         
         return cert, private_key
     
+    def create_sni_extension(self, server_name: str) -> bytes:
+        """创建SNI扩展"""
+        # SNI扩展格式:
+        # Extension Type (2 bytes): 0x0000
+        # Extension Length (2 bytes)
+        # Server Name List Length (2 bytes)
+        # Server Name Type (1 byte): 0x00 (host_name)
+        # Server Name Length (2 bytes)
+        # Server Name (variable)
+        
+        server_name_bytes = server_name.encode('utf-8')
+        server_name_length = len(server_name_bytes)
+        
+        # 构造服务器名称条目
+        server_name_entry = struct.pack('!BH', 
+            DTLSConstants.SNI_NAME_TYPE_HOSTNAME,  # 名称类型: host_name
+            server_name_length                      # 名称长度
+        ) + server_name_bytes
+        
+        # 服务器名称列表长度
+        server_name_list_length = len(server_name_entry)
+        
+        # 扩展数据
+        extension_data = struct.pack('!H', server_name_list_length) + server_name_entry
+        
+        # 完整的SNI扩展
+        sni_extension = struct.pack('!HH', 
+            DTLSConstants.EXTENSION_SERVER_NAME,  # 扩展类型
+            len(extension_data)                   # 扩展长度
+        ) + extension_data
+        
+        return sni_extension
+    
     def create_client_hello(self) -> bytes:
         """创建Client Hello消息"""
         # 生成客户端随机数
         self.client_random = secrets.token_bytes(32)
         
         # 构造Client Hello - 符合DTLS标准格式
-        version = struct.pack('!H', DTLSConstants.DTLS_1_2)  # DTLS 1.2 = 0xFEFD
+        version = struct.pack('!H', DTLSConstants.DTLS_1_0)  # DTLS 1.2 = 0xFEFD
         random = self.client_random  # 32字节随机数
         
         # Session ID
@@ -249,9 +289,15 @@ class CompleteDTLSClient:
         compression_method = struct.pack('!B', DTLSConstants.COMPRESSION_NULL)
         compression_methods = compression_methods_length + compression_method
         
-        # 扩展（暂时为空）
-        extensions_length = struct.pack('!H', 0)
+        # 扩展
         extensions = b''
+        if self.server_name:
+            # 添加SNI扩展
+            sni_extension = self.create_sni_extension(self.server_name)
+            extensions += sni_extension
+            logger.info(f"添加SNI扩展，服务器名称: {self.server_name}")
+        
+        extensions_length = struct.pack('!H', len(extensions))
         
         # 按照DTLS标准顺序组装Client Hello
         client_hello_data = (version + random + session_id_length + session_id + 
@@ -304,7 +350,7 @@ class CompleteDTLSClient:
             
             # 解析版本
             version = struct.unpack('!H', data[0:2])[0]
-            if version != DTLSConstants.DTLS_1_2:
+            if version != DTLSConstants.DTLS_1_0:
                 logger.error(f"不支持的DTLS版本: {hex(version)}")
                 return False
             
@@ -369,7 +415,7 @@ class CompleteDTLSClient:
     def create_client_key_exchange(self) -> bytes:
         """创建Client Key Exchange消息"""
         # 生成预主密钥 (48字节)
-        self.pre_master_secret = (struct.pack('!H', DTLSConstants.DTLS_1_2) + 
+        self.pre_master_secret = (struct.pack('!H', DTLSConstants.DTLS_1_0) + 
                                 secrets.token_bytes(46))
         
         # 使用服务器公钥加密预主密钥
