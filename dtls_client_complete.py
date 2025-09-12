@@ -127,8 +127,13 @@ class DTLSRecord:
         version = DTLSConstants.DTLS_1_0
         
         # 如果启用了加密，则加密数据
-        if self.encryption_enabled and self.cipher and content_type == DTLSConstants.HANDSHAKE:
-            data = self._encrypt_data(content_type, data)
+        if self.encryption_enabled and content_type == DTLSConstants.HANDSHAKE:
+            # 检查是否有加密能力（CBC或GCM模式）
+            has_cipher = (hasattr(self, 'cipher') and self.cipher) or \
+                        (hasattr(self, 'cipher_algorithm') and self.cipher_algorithm)
+            if has_cipher:
+                data = self._encrypt_data(content_type, data)
+                logger.debug(f"记录层加密: {content_type} -> {len(data)}字节")
         
         length = len(data)
         
