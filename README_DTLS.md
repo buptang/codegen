@@ -1,253 +1,274 @@
 # Python DTLS 客户端实现
 
-这是一个完整的 Python3 DTLS (Datagram Transport Layer Security) 客户端实现，支持与 DTLS 服务端进行安全协商、交互和加密通信。
+这是一个使用Python 3实现的完整DTLS (Datagram Transport Layer Security) 1.2客户端，支持与DTLS服务端进行安全的握手协商和加密通信。
 
 ## 🚀 功能特性
 
-### 核心功能
-- ✅ 完整的 DTLS 1.0 握手流程
-- ✅ 客户端证书验证
-- ✅ 密钥交换和协商
-- ✅ 加密数据传输
-- ✅ 会话管理
+### ✅ 完整的DTLS 1.2协议支持
+- **标准握手流程**: Client Hello → Hello Verify Request → Client Hello (with Cookie) → Server Hello → Certificate → Server Key Exchange → Server Hello Done → Client Key Exchange + Change Cipher Spec + Finished → Change Cipher Spec + Finished
+- **Cookie验证**: 支持DTLS特有的Hello Verify Request和Cookie机制
+- **消息重传**: 实现DTLS的可靠性保证机制
 
-### TLS/DTLS 扩展支持
-- ✅ **SNI (Server Name Indication)** - 服务器名称指示
-- ✅ **EC Point Formats** - 椭圆曲线点格式
-- ✅ **Supported Groups** - 支持的椭圆曲线组
-- ✅ **Signature Algorithms** - 签名算法协商
-- ✅ **OCSP Status Request** - 在线证书状态协议
-- ✅ **Encrypt-then-MAC** - 先加密后MAC
-- ✅ **Extended Master Secret** - 扩展主密钥
-- ✅ **Session Ticket** - 会话票据
+### 🔐 密码学功能
+- **多种密码套件**: 支持RSA、ECDHE密钥交换
+- **加密算法**: AES-128-GCM, AES-256-GCM, AES-128-CBC, AES-256-CBC
+- **哈希算法**: SHA-256, SHA-384
+- **椭圆曲线**: secp256r1, secp384r1, secp521r1
 
-### 安全特性
-- 🔐 支持多种现代密码套件
-- 🔐 ECDHE 前向安全性密钥交换
-- 🔐 RSA 和 ECDSA 签名算法
-- 🔐 AES-GCM 和 AES-CBC 加密
-- 🔐 完整性验证和重新协商保护
+### 🛡️ 安全特性
+- **证书验证**: X.509证书链验证
+- **Server Key Exchange**: 支持ECDHE临时密钥交换
+- **完美前向保密**: 通过ECDHE实现
+- **消息认证**: HMAC和AEAD模式
 
-### 支持的密码套件
-- ✅ **TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384** (0xC02C) - 最高安全级别
-- ✅ **TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256** (0xC02B) - ECDSA + AES-128-GCM
-- ✅ **TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384** (0xC030) - RSA + AES-256-GCM
-- ✅ **TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256** (0xC028) - RSA + AES-128-GCM
-- ✅ **TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA** (0xC013) - 传统CBC模式
-- ✅ **TLS_RSA_WITH_AES_128_GCM_SHA256** (0x009C) - 基础RSA套件
-- ✅ **TLS_RSA_WITH_AES_256_GCM_SHA384** (0x009D) - RSA + AES-256
-- ✅ **TLS_EMPTY_RENEGOTIATION_INFO_SCSV** (0x00FF) - 重新协商保护
+### 🔧 实现亮点
+- **模块化设计**: 分离记录层、握手层和应用层
+- **错误处理**: 完善的异常处理和日志记录
+- **扩展支持**: SNI、椭圆曲线、签名算法等扩展
+- **优化握手**: 合并客户端消息发送以提高效率
 
 ## 📁 文件结构
 
 ```
-├── dtls_client_complete.py    # 完整的DTLS客户端实现
-├── dtls_server_complete.py    # 配套的DTLS服务端实现
+├── dtls_client_complete.py    # 完整DTLS客户端实现
 ├── test_dtls_client.py        # 测试脚本
 └── README_DTLS.md            # 本文档
 ```
 
-## 🛠️ 安装要求
-
-```bash
-# Python 3.7+
-pip install cryptography
-```
-
-## 📖 使用方法
-
-### 基本用法
-
-```python
-from dtls_client_complete import DTLSClient
-
-# 创建客户端
-client = DTLSClient()
-
-# 设置服务器名称（可选，用于SNI扩展）
-client.server_name = "example.com"
-
-# 连接到DTLS服务器
-success = client.connect('127.0.0.1', 4433)
-
-if success:
-    # 发送加密数据
-    message = "Hello, DTLS Server!"
-    client.send_data(message.encode('utf-8'))
-    
-    # 接收响应
-    response = client.receive_data()
-    if response:
-        print(f"收到响应: {response.decode('utf-8')}")
-    
-    # 清理资源
-    client.cleanup()
-```
-
-### 高级配置
-
-```python
-from dtls_client_complete import DTLSClient
-
-client = DTLSClient()
-
-# 配置连接参数
-client.server_name = "secure.example.com"  # SNI扩展
-client.timeout = 10.0                      # 超时时间
-
-# 连接并处理
-try:
-    if client.connect('secure.example.com', 4433):
-        # 执行安全通信
-        data = client.send_and_receive(b"GET /api/data HTTP/1.1\r\n\r\n")
-        print(f"API响应: {data}")
-except Exception as e:
-    print(f"连接失败: {e}")
-finally:
-    client.cleanup()
-```
-
-## 🧪 运行测试
-
-```bash
-# 运行完整测试套件
-python test_dtls_client.py
-
-# 单独测试扩展功能
-python -c "from test_dtls_client import test_extensions; test_extensions()"
-```
-
-## 🔧 支持的扩展详解
-
-### 1. SNI (Server Name Indication)
-允许客户端指定要连接的服务器名称，支持虚拟主机。
-
-```python
-client.server_name = "api.example.com"
-```
-
-### 2. EC Point Formats
-指定支持的椭圆曲线点格式：
-- Uncompressed (0x00)
-
-### 3. Supported Groups
-支持的椭圆曲线组：
-- P-256 (secp256r1)
-- P-384 (secp384r1) 
-- P-521 (secp521r1)
-- X25519
-
-### 4. Signature Algorithms
-支持的签名算法：
-- RSA-PKCS1-SHA256
-- RSA-PKCS1-SHA384
-- RSA-PKCS1-SHA512
-- ECDSA-secp256r1-SHA256
-- ECDSA-secp384r1-SHA384
-
-### 5. 其他扩展
-- **OCSP Status Request**: 在线证书状态检查
-- **Encrypt-then-MAC**: 提高安全性的MAC计算方式
-- **Extended Master Secret**: 增强的主密钥派生
-- **Session Ticket**: 支持会话恢复
-
 ## 🏗️ 架构设计
 
-### 类结构
-```
-DTLSConstants          # 协议常量定义
-├── 内容类型
-├── DTLS版本
-├── 握手消息类型
-├── 密码套件
-└── 扩展类型
+### 核心类结构
 
-DTLSRecord            # DTLS记录层
-├── create_record()   # 创建DTLS记录
-└── parse_record()    # 解析DTLS记录
-
-DTLSClient           # DTLS客户端主类
-├── connect()        # 建立连接
-├── send_data()      # 发送数据
-├── receive_data()   # 接收数据
-├── create_*_extension()  # 各种扩展创建方法
-└── cleanup()        # 清理资源
+```python
+class DTLSConstants:
+    """DTLS协议常量定义"""
+    
+class DTLSRecord:
+    """DTLS记录层实现"""
+    
+class DTLSHandshake:
+    """DTLS握手层实现"""
+    
+class DTLSClient:
+    """DTLS客户端主类"""
 ```
 
-### 握手流程
+### 关键方法
+
+#### 握手流程
+- `handshake()`: 执行完整DTLS握手
+- `parse_server_hello()`: 解析服务器Hello消息
+- `parse_certificate()`: 解析服务器证书
+- `parse_server_key_exchange()`: 解析服务器密钥交换消息
+
+#### 密钥管理
+- `generate_keys()`: 生成主密钥和会话密钥
+- `create_client_key_exchange()`: 创建客户端密钥交换消息
+- `create_finished_message()`: 创建Finished消息
+
+#### 数据传输
+- `send_application_data()`: 发送加密应用数据
+- `receive_application_data()`: 接收解密应用数据
+
+## 🚀 使用方法
+
+### 基本使用
+
+```python
+from dtls_client_complete import DTLSClient
+
+# 创建DTLS客户端
+client = DTLSClient(
+    server_host='localhost',
+    server_port=4433,
+    server_name='example.com'
+)
+
+try:
+    # 执行握手
+    if client.handshake():
+        print("握手成功！")
+        
+        # 发送数据
+        message = "Hello, DTLS Server!"
+        client.send_application_data(message.encode())
+        
+        # 接收响应
+        response = client.receive_application_data()
+        print(f"收到响应: {response.decode()}")
+        
+finally:
+    client.close()
 ```
-客户端                    服务端
+
+### 运行测试
+
+```bash
+# 运行测试脚本
+python3 test_dtls_client.py
+
+# 查看帮助
+python3 test_dtls_client.py --help
+```
+
+## 🧪 测试环境
+
+### 使用OpenSSL测试服务器
+
+```bash
+# 1. 生成测试证书
+openssl req -x509 -newkey rsa:2048 -keyout server.key -out server.crt -days 365 -nodes -subj "/CN=localhost"
+
+# 2. 启动DTLS服务器
+openssl s_server -dtls1_2 -accept 4433 -cert server.crt -key server.key
+
+# 3. 在另一个终端运行客户端
+python3 test_dtls_client.py
+```
+
+### 支持的测试场景
+
+1. **基本连接测试**: 验证握手流程
+2. **证书验证测试**: 测试X.509证书处理
+3. **密钥交换测试**: 验证ECDHE密钥协商
+4. **加密通信测试**: 测试应用数据加密传输
+5. **错误处理测试**: 验证异常情况处理
+
+## 🔍 协议实现细节
+
+### DTLS握手流程
+
+```
+客户端                    服务器
    |                        |
-   |--- Client Hello ------>|  (包含所有扩展)
-   |                        |
-   |<--- Server Hello ------|  (选择密码套件)
-   |<--- Certificate ------|  (服务器证书)
+   |--- Client Hello ------>|
+   |<-- Hello Verify Req ---|
+   |--- Client Hello ------>|  (with Cookie)
+   |<----- Server Hello ----|
+   |<----- Certificate -----|
+   |<-- Server Key Exch. ---|  (ECDHE)
    |<-- Server Hello Done --|
    |                        |
-   |-- Client Key Exchange->|  (密钥交换)
-   |-- Change Cipher Spec ->|  (切换到加密模式)
-   |------ Finished ------>|  (握手完成)
-   |                        |
+   |-- Client Key Exch. --->|
+   |-- Change Cipher Spec ->|
+   |------ Finished ------->|
    |<- Change Cipher Spec --|
-   |<------ Finished ------|
+   |<------ Finished -------|
    |                        |
-   |<==== 加密通信 ====>|
+   |<==== 加密通信 ========>|
 ```
+
+### 新增功能说明
+
+#### Server Key Exchange处理
+- 解析椭圆曲线参数
+- 提取服务器临时公钥
+- 验证数字签名
+- 支持多种椭圆曲线
+
+#### 优化的消息发送
+- 将Client Key Exchange、Change Cipher Spec、Finished消息合并发送
+- 减少网络往返次数
+- 提高握手效率
+
+## 📋 依赖要求
+
+```python
+# 标准库
+import socket
+import struct
+import hashlib
+import hmac
+import secrets
+import logging
+import datetime
+
+# 第三方库
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+```
+
+## 🔧 配置选项
+
+### 支持的密码套件
+- `TLS_RSA_WITH_AES_128_GCM_SHA256`
+- `TLS_RSA_WITH_AES_256_GCM_SHA384`
+- `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`
+- `TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384`
+- `TLS_RSA_WITH_AES_128_CBC_SHA256`
+- `TLS_RSA_WITH_AES_256_CBC_SHA256`
+- `TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256`
+- `TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384`
+
+### 支持的扩展
+- Server Name Indication (SNI)
+- EC Point Formats
+- Supported Elliptic Curves
+- Signature Algorithms
+- OCSP Status Request
+- Encrypt-then-MAC
+- Extended Master Secret
+- Session Ticket
 
 ## 🐛 故障排除
 
 ### 常见问题
 
-1. **连接超时**
-   ```python
-   client.timeout = 30.0  # 增加超时时间
-   ```
+1. **连接被拒绝**
+   - 确保DTLS服务器正在运行
+   - 检查端口号是否正确
+   - 验证防火墙设置
 
-2. **证书验证失败**
-   ```python
-   # 检查服务器证书是否有效
-   # 确保时间同步正确
-   ```
+2. **握手失败**
+   - 检查密码套件兼容性
+   - 验证证书有效性
+   - 确认协议版本支持
 
-3. **握手失败**
-   ```python
-   # 检查支持的密码套件
-   # 验证扩展兼容性
-   ```
+3. **证书验证错误**
+   - 检查证书链完整性
+   - 验证证书有效期
+   - 确认主机名匹配
 
-### 调试模式
+### 调试技巧
 
 ```python
-import logging
+# 启用详细日志
 logging.basicConfig(level=logging.DEBUG)
 
-# 现在会显示详细的握手过程
-client = DTLSClient()
-client.connect('127.0.0.1', 4433)
+# 查看握手消息
+client = DTLSClient(server_host='localhost', server_port=4433)
+client.handshake()  # 查看日志输出
 ```
 
-## 🔒 安全注意事项
+## 🤝 贡献指南
 
-1. **证书验证**: 在生产环境中务必验证服务器证书
-2. **密码套件**: 使用强加密算法，避免弱密码套件
-3. **随机数**: 确保随机数生成器的安全性
-4. **会话管理**: 适当管理会话生命周期
-5. **错误处理**: 妥善处理各种异常情况
+欢迎提交Issue和Pull Request来改进这个DTLS客户端实现！
 
-## 📝 许可证
+### 开发环境设置
 
-本项目采用 MIT 许可证。
+```bash
+# 克隆仓库
+git clone <repository-url>
+cd dtls-client
 
-## 🤝 贡献
+# 安装依赖
+pip3 install cryptography
 
-欢迎提交 Issue 和 Pull Request！
+# 运行测试
+python3 test_dtls_client.py
+```
 
-## 📞 联系方式
+## 📄 许可证
 
-如有问题或建议，请通过以下方式联系：
-- GitHub Issues
-- Email: [您的邮箱]
+本项目采用MIT许可证，详见LICENSE文件。
+
+## 🙏 致谢
+
+感谢所有为DTLS协议标准化和Python密码学库开发做出贡献的开发者们！
 
 ---
 
-**注意**: 这是一个教育和测试用途的实现。在生产环境中使用前，请进行充分的安全审计和测试。
+**注意**: 这是一个教育和测试用途的DTLS客户端实现。在生产环境中使用前，请进行充分的安全审计和测试。
+
