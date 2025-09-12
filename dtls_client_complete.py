@@ -317,6 +317,8 @@ class DTLSHandshake:
         frag_length = int.from_bytes(data[9:12], 'big')
         payload = data[12:12+frag_length]
         
+        # 将服务端握手消息也添加到握手消息列表中（用于Finished消息计算）
+        self.handshake_messages.append(data)
         return msg_type, payload
 
 
@@ -1027,7 +1029,7 @@ class CompleteDTLSClient:
                 logger.info("Change Cipher Spec后启用加密")
             
             # 4. 创建Finished消息（将被加密）
-            finished = self.create_finished_message()
+            finished = self.create_finished()
             if not finished:
                 logger.error("创建Finished消息失败")
                 return b''
