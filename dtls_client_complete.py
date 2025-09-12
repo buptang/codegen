@@ -232,7 +232,7 @@ class DTLSHandshake:
 class CompleteDTLSClient:
     """完整的DTLS客户端实现"""
     
-    def __init__(self, server_host: str = 'localhost', server_port: int = 4433, server_name: str = None):
+    def __init__(self, server_host: str = 'localhost', server_port: int = 443, server_name: str = None):
         self.server_host = server_host
         self.server_port = server_port
         self.socket = None
@@ -317,7 +317,7 @@ class CompleteDTLSClient:
         # Server Name Length (2 bytes)
         # Server Name (variable)
         
-        server_name_bytes = server_name.encode('utf-8')
+        server_name_bytes = server_name.upper().encode('utf-8')
         server_name_length = len(server_name_bytes)
         
         # 构造服务器名称条目
@@ -1306,7 +1306,7 @@ def main():
     print("✅ 支持RSA密钥交换和AES-GCM加密")
     print()
     
-    client = CompleteDTLSClient(server_host='localhost', server_port=4433)
+    client = CompleteDTLSClient(server_host='localhost', server_port=443)
     
     try:
         # 执行完整握手
