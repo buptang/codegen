@@ -218,6 +218,9 @@ class CompleteDTLSClient:
         self.client_certificate = None
         self.client_private_key = None
         
+        # 服务器临时公钥信息 (用于ECDHE)
+        self.server_temp_public_key = None
+        
         # 加密状态
         self.encryption_enabled = False
         
@@ -592,6 +595,82 @@ class CompleteDTLSClient:
             logger.error(f"解析证书失败: {e}")
             return False
     
+    
+    def parse_server_key_exchange(self, data: bytes) -> bool:
+        """解析Server Key Exchange消息"""
+        try:
+            if len(data) < 4:
+                logger.warning("Server Key Exchange消息长度不足")
+                return False
+            
+            offset = 0
+            
+            # 解析椭圆曲线类型 (1字节)
+            if offset >= len(data):
+                return False
+            curve_type = data[offset]
+            offset += 1
+            
+            if curve_type == 3:  # named_curve
+                # 解析命名曲线 (2字节)
+                if offset + 2 > len(data):
+                    return False
+                named_curve = struct.unpack('!H', data[offset:offset+2])[0]
+                offset += 2
+                
+                # 解析公钥长度 (1字节)
+                if offset >= len(data):
+                    return False
+                pubkey_length = data[offset]
+                offset += 1
+                
+                # 解析公钥数据
+                if offset + pubkey_length > len(data):
+                    return False
+                pubkey_data = data[offset:offset+pubkey_length]
+                offset += pubkey_length
+                
+                # 解析签名算法 (2字节)
+                if offset + 2 > len(data):
+                    return False
+                signature_algorithm = struct.unpack('!H', data[offset:offset+2])[0]
+                offset += 2
+                
+                # 解析签名长度 (2字节)
+                if offset + 2 > len(data):
+                    return False
+                signature_length = struct.unpack('!H', data[offset:offset+2])[0]
+                offset += 2
+                
+                # 解析签名数据
+                if offset + signature_length > len(data):
+                    return False
+                signature_data = data[offset:offset+signature_length]
+                
+                logger.info(f"Server Key Exchange解析成功:")
+                logger.info(f"  曲线类型: {curve_type}")
+                logger.info(f"  命名曲线: {named_curve}")
+                logger.info(f"  公钥长度: {pubkey_length}")
+                logger.info(f"  签名算法: {signature_algorithm}")
+                logger.info(f"  签名长度: {signature_length}")
+                
+                # 存储服务器的临时公钥信息
+                self.server_temp_public_key = {
+                    'curve_type': curve_type,
+                    'named_curve': named_curve,
+                    'public_key': pubkey_data,
+                    'signature_algorithm': signature_algorithm,
+                    'signature': signature_data
+                }
+                
+                return True
+            else:
+                logger.warning(f"不支持的椭圆曲线类型: {curve_type}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"解析Server Key Exchange失败: {e}")
+            return False
     def create_client_key_exchange(self) -> bytes:
         """创建Client Key Exchange消息"""
         # 生成预主密钥 (48字节)
@@ -814,54 +893,62 @@ class CompleteDTLSClient:
             if not self.parse_server_hello(server_hello_data):
                 return False
             
-            # 5. 接收Certificate (可选)
-            logger.info("5. 等待Certificate")
-            try:
-                response = self.socket.recv(4096)
-                content_type, payload = self.record_layer.parse_record(response)
-                
-                if content_type == DTLSConstants.HANDSHAKE:
-                    msg_type, cert_data = self.handshake_layer.parse_handshake_message(payload)
-                    if msg_type == DTLSConstants.CERTIFICATE:
-                        self.parse_certificate(cert_data)
-            except socket.timeout:
-                logger.info("未收到证书消息（可能是PSK模式）")
             
-            # 6. 接收Server Hello Done
-            logger.info("6. 等待Server Hello Done")
-            try:
-                response = self.socket.recv(4096)
-                content_type, payload = self.record_layer.parse_record(response)
-                
-                if content_type == DTLSConstants.HANDSHAKE:
-                    msg_type, _ = self.handshake_layer.parse_handshake_message(payload)
-                    if msg_type != DTLSConstants.SERVER_HELLO_DONE:
-                        logger.warning("未收到Server Hello Done")
-            except socket.timeout:
-                logger.info("未收到Server Hello Done（继续握手）")
+            # 5. 接收服务器握手消息 (Certificate, Server Key Exchange, Server Hello Done)
+            logger.info("5. 等待服务器握手消息")
+            server_hello_done_received = False
             
-            # 7. 发送Client Key Exchange
-            logger.info("7. 发送Client Key Exchange")
+            while not server_hello_done_received:
+                try:
+                    response = self.socket.recv(4096)
+                    content_type, payload = self.record_layer.parse_record(response)
+                    
+                    if content_type == DTLSConstants.HANDSHAKE:
+                        msg_type, message_data = self.handshake_layer.parse_handshake_message(payload)
+                        
+                        if msg_type == DTLSConstants.CERTIFICATE:
+                            logger.info("收到Certificate消息")
+                            self.parse_certificate(message_data)
+                            
+                        elif msg_type == DTLSConstants.SERVER_KEY_EXCHANGE:
+                            logger.info("收到Server Key Exchange消息")
+                            self.parse_server_key_exchange(message_data)
+                            
+                        elif msg_type == DTLSConstants.SERVER_HELLO_DONE:
+                            logger.info("收到Server Hello Done消息")
+                            server_hello_done_received = True
+                            
+                        else:
+                            logger.warning(f"收到未处理的握手消息类型: {msg_type}")
+                            
+                except socket.timeout:
+                    logger.info("握手消息接收超时，继续处理")
+                    break
+            
+            # 6. 一次性发送客户端握手消息
+            logger.info("6. 发送客户端握手消息 (Client Key Exchange + Change Cipher Spec + Finished)")
+            
+            # 6a. 创建Client Key Exchange
             client_key_exchange = self.create_client_key_exchange()
             if client_key_exchange:
                 client_key_exchange_record = self.record_layer.create_record(
                     DTLSConstants.HANDSHAKE, client_key_exchange)
                 self.socket.send(client_key_exchange_record)
+                logger.info("发送Client Key Exchange")
             
-            # 8. 发送Change Cipher Spec
-            logger.info("8. 发送Change Cipher Spec")
+            # 6b. 发送Change Cipher Spec
             change_cipher_spec = struct.pack('!B', 1)
             change_cipher_spec_record = self.record_layer.create_record(
                 DTLSConstants.CHANGE_CIPHER_SPEC, change_cipher_spec)
             self.socket.send(change_cipher_spec_record)
+            logger.info("发送Change Cipher Spec")
             
-            # 9. 发送Finished
-            logger.info("9. 发送Finished")
+            # 6c. 发送Encrypted Handshake Message (Finished)
             finished = self.create_finished_message()
             finished_record = self.record_layer.create_record(
                 DTLSConstants.HANDSHAKE, finished)
             self.socket.send(finished_record)
-            
+            logger.info("发送Encrypted Handshake Message (Finished)")
             # 10. 接收Change Cipher Spec
             logger.info("10. 等待Change Cipher Spec")
             try:
