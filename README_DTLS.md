@@ -11,6 +11,7 @@
 
 ### 🔐 密码学功能
 - **多种密码套件**: 支持RSA、ECDHE密钥交换
+- **ECDH密钥交换**: 完整的椭圆曲线Diffie-Hellman实现
 - **加密算法**: AES-128-GCM, AES-256-GCM, AES-128-CBC, AES-256-CBC
 - **哈希算法**: SHA-256, SHA-384
 - **椭圆曲线**: secp256r1, secp384r1, secp521r1
@@ -26,12 +27,15 @@
 - **错误处理**: 完善的异常处理和日志记录
 - **扩展支持**: SNI、椭圆曲线、签名算法等扩展
 - **优化握手**: 合并客户端消息发送以提高效率
+- **ECDH支持**: 完整的椭圆曲线密钥交换实现
+- **消息合并**: 将多个握手消息合并到单个数据包发送
 
 ## 📁 文件结构
 
 ```
 ├── dtls_client_complete.py    # 完整DTLS客户端实现
-├── test_dtls_client.py        # 测试脚本
+├── test_dtls_client.py        # 基本测试脚本
+├── test_ecdh_functionality.py # ECDH功能测试脚本
 └── README_DTLS.md            # 本文档
 ```
 
@@ -63,8 +67,12 @@ class DTLSClient:
 
 #### 密钥管理
 - `generate_keys()`: 生成主密钥和会话密钥
-- `create_client_key_exchange()`: 创建客户端密钥交换消息
+- `create_client_key_exchange()`: 创建客户端密钥交换消息（支持RSA和ECDH）
+- `_create_ecdh_client_key_exchange()`: ECDH密钥交换实现
+- `_create_rsa_client_key_exchange()`: RSA密钥交换实现
+- `_reconstruct_server_public_key()`: 重构服务器椭圆曲线公钥
 - `create_finished_message()`: 创建Finished消息
+- `create_bundled_client_messages()`: 创建合并的客户端消息包
 
 #### 数据传输
 - `send_application_data()`: 发送加密应用数据
@@ -271,4 +279,3 @@ python3 test_dtls_client.py
 ---
 
 **注意**: 这是一个教育和测试用途的DTLS客户端实现。在生产环境中使用前，请进行充分的安全审计和测试。
-
