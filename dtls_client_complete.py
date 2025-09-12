@@ -111,13 +111,16 @@ class DTLSConstants:
 class DTLSRecord:
     """DTLS记录层"""
     
-    def __init__(self):
+    def __init__(self, cipher_suite=None):
         self.sequence_number = 0
         self.epoch = 0
         self.encryption_enabled = False
         self.cipher = None
         self.client_write_key = None
         self.client_write_iv = None
+        self.client_write_mac_key = None
+        self.cipher_suite = cipher_suite
+        self.cipher_mode = None
     
     def create_record(self, content_type: int, data: bytes) -> bytes:
         """创建DTLS记录"""
@@ -138,41 +141,123 @@ class DTLSRecord:
         self.sequence_number += 1
         return record
     
-    def enable_encryption(self, client_write_key: bytes, client_write_iv: bytes):
+    def enable_encryption(self, client_write_key: bytes, client_write_iv: bytes, client_write_mac_key: bytes = None):
         """启用记录层加密"""
         self.encryption_enabled = True
         self.client_write_key = client_write_key
         self.client_write_iv = client_write_iv
+        self.client_write_mac_key = client_write_mac_key
         self.epoch += 1  # Change Cipher Spec后epoch增加
         self.sequence_number = 0  # 重置序列号
         
-        # 创建AES-GCM加密器
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        self.cipher = AESGCM(client_write_key)
-        logger.info("记录层加密已启用")
+        # 根据密码套件选择加密模式
+        if hasattr(self, 'cipher_suite') and self.cipher_suite:
+            if self.cipher_suite == DTLSConstants.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:
+                # AES-128-CBC + HMAC-SHA1
+                from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+                from cryptography.hazmat.backends import default_backend
+                
+                self.cipher_mode = 'CBC'
+                self.cipher_algorithm = Cipher(
+                    algorithms.AES(client_write_key),
+                    modes.CBC(client_write_iv),
+                    backend=default_backend()
+                )
+                logger.info(f"记录层加密已启用 (AES-128-CBC + HMAC-SHA1)")
+                logger.debug(f"加密参数 - 密钥长度: {len(client_write_key)}, IV长度: {len(client_write_iv)}")
+                if client_write_mac_key:
+                    logger.debug(f"MAC密钥长度: {len(client_write_mac_key)}")
+            else:
+                # AES-GCM (默认)
+                from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+                self.cipher_mode = 'GCM'
+                self.cipher = AESGCM(client_write_key)
+                logger.info("记录层加密已启用 (AES-GCM)")
+        else:
+            # 默认使用AES-GCM
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+            self.cipher_mode = 'GCM'
+            self.cipher = AESGCM(client_write_key)
+            logger.info("记录层加密已启用 (默认AES-GCM)")
     
     def _encrypt_data(self, content_type: int, data: bytes) -> bytes:
         """加密记录数据"""
-        if not self.cipher or not self.client_write_iv:
+        if not self.encryption_enabled:
             return data
         
         try:
-            # 构造nonce (IV + sequence_number)
-            nonce = self.client_write_iv + struct.pack("!Q", self.sequence_number)
-            
-            # 构造附加认证数据 (AAD)
-            aad = (struct.pack("!Q", self.sequence_number)[2:] +  # 6字节序列号
-                   struct.pack("!BHH", content_type, DTLSConstants.DTLS_1_0, self.epoch) +
-                   struct.pack("!H", len(data)))
-            
-            # 使用AES-GCM加密
-            encrypted_data = self.cipher.encrypt(nonce, data, aad)
-            logger.debug(f"数据加密成功，原长度: {len(data)}, 加密后长度: {len(encrypted_data)}")
-            return encrypted_data
+            if hasattr(self, 'cipher_mode') and self.cipher_mode == 'CBC':
+                # AES-128-CBC + HMAC-SHA1 模式
+                return self._encrypt_data_cbc(content_type, data)
+            else:
+                # AES-GCM 模式 (默认)
+                return self._encrypt_data_gcm(content_type, data)
         except Exception as e:
             logger.error(f"数据加密失败: {e}")
             return data
-
+    
+    def _encrypt_data_gcm(self, content_type: int, data: bytes) -> bytes:
+        """使用AES-GCM加密数据"""
+        if not hasattr(self, 'cipher') or not self.cipher:
+            return data
+        
+        # 构造nonce (IV + sequence_number)
+        nonce = self.client_write_iv + struct.pack("!Q", self.sequence_number)
+        
+        # 构造附加认证数据 (AAD)
+        aad = (struct.pack("!Q", self.sequence_number)[2:] +  # 6字节序列号
+               struct.pack("!BHH", content_type, DTLSConstants.DTLS_1_0, self.epoch) +
+               struct.pack("!H", len(data)))
+        
+        # 使用AES-GCM加密
+        encrypted_data = self.cipher.encrypt(nonce, data, aad)
+        logger.debug(f"AES-GCM加密成功，原长度: {len(data)}, 加密后长度: {len(encrypted_data)}")
+        return encrypted_data
+    
+    def _encrypt_data_cbc(self, content_type: int, data: bytes) -> bytes:
+        """使用AES-128-CBC + HMAC-SHA1加密数据"""
+        if not hasattr(self, 'cipher_algorithm') or not self.cipher_algorithm:
+            return data
+        
+        from cryptography.hazmat.primitives import hashes, hmac, padding
+        import os
+        
+        # 1. 计算HMAC-SHA1
+        # 构造MAC数据: seq_num + type + version + length + data
+        mac_data = (struct.pack("!Q", self.sequence_number)[2:] +  # 6字节序列号
+                   struct.pack("!BHH", content_type, DTLSConstants.DTLS_1_0, len(data)) +
+                   data)
+        
+        # 使用客户端写MAC密钥计算HMAC-SHA1
+        if hasattr(self, 'client_write_mac_key') and self.client_write_mac_key:
+            h = hmac.HMAC(self.client_write_mac_key, hashes.SHA1())
+            h.update(mac_data)
+            mac = h.finalize()
+        else:
+            # 如果没有MAC密钥，使用空MAC (不安全，仅用于测试)
+            mac = b'\x00' * 20  # SHA1输出20字节
+            logger.warning("没有MAC密钥，使用空MAC")
+        
+        # 2. 添加填充 (PKCS#7)
+        padder = padding.PKCS7(128).padder()  # AES块大小128位
+        padded_data = padder.update(data + mac) + padder.finalize()
+        
+        # 3. 生成随机IV用于CBC加密
+        iv = os.urandom(16)  # AES块大小
+        
+        # 4. AES-CBC加密
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.backends import default_backend
+        
+        cipher = Cipher(algorithms.AES(self.client_write_key), modes.CBC(iv), backend=default_backend())
+        encryptor = cipher.encryptor()
+        encrypted_data = encryptor.update(padded_data) + encryptor.finalize()
+        
+        # 5. 返回 IV + 加密数据
+        result = iv + encrypted_data
+        
+        logger.debug(f"AES-CBC加密成功，原长度: {len(data)}, MAC长度: {len(mac)}, 填充后长度: {len(padded_data)}, 加密后长度: {len(encrypted_data)}, 总长度: {len(result)}")
+        return result
     def parse_record(self, data: bytes) -> Tuple[int, bytes]:
         """解析DTLS记录"""
         if len(data) < 13:
@@ -599,6 +684,9 @@ class CompleteDTLSClient:
             cipher_suite_offset = session_id_end
             self.cipher_suite = struct.unpack('!H', data[cipher_suite_offset:cipher_suite_offset+2])[0]
             
+            # 重新初始化记录层以传递密码套件信息
+            self.record_layer = DTLSRecord(self.cipher_suite)
+            
             # 解析压缩方法
             compression_offset = cipher_suite_offset + 2
             self.compression_method = data[compression_offset]
@@ -927,7 +1015,9 @@ class CompleteDTLSClient:
             
             # 3. 启用记录层加密（在Change Cipher Spec之后）
             if hasattr(self, 'client_write_key') and hasattr(self, 'client_write_iv'):
-                self.record_layer.enable_encryption(self.client_write_key, self.client_write_iv)
+                # 传递MAC密钥（如果存在）
+                mac_key = getattr(self, 'client_write_mac_key', None)
+                self.record_layer.enable_encryption(self.client_write_key, self.client_write_iv, mac_key)
                 logger.info("Change Cipher Spec后启用加密")
             
             # 4. 创建Finished消息（将被加密）
@@ -978,28 +1068,72 @@ class CompleteDTLSClient:
         seed = b"key expansion" + self.server_random + self.client_random
         
         # 根据密码套件确定密钥长度
-        if self.cipher_suite == DTLSConstants.TLS_RSA_WITH_AES_128_GCM_SHA256:
+        if self.cipher_suite == DTLSConstants.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:
+            # AES-128-CBC + HMAC-SHA1
+            key_length = 16     # AES-128密钥长度
+            mac_length = 20     # HMAC-SHA1密钥长度
+            iv_length = 16      # CBC模式IV长度 (AES块大小)
+            
+            # 密钥材料顺序: client_write_MAC_key + server_write_MAC_key + 
+            #              client_write_key + server_write_key + 
+            #              client_write_IV + server_write_IV
+            key_material_length = 2 * (mac_length + key_length + iv_length)
+            key_material = self._prf(self.master_secret, seed, key_material_length)
+            
+            # 分配密钥
+            offset = 0
+            self.client_write_mac_key = key_material[offset:offset+mac_length]
+            offset += mac_length
+            self.server_write_mac_key = key_material[offset:offset+mac_length]
+            offset += mac_length
+            self.client_write_key = key_material[offset:offset+key_length]
+            offset += key_length
+            self.server_write_key = key_material[offset:offset+key_length]
+            offset += key_length
+            self.client_write_iv = key_material[offset:offset+iv_length]
+            offset += iv_length
+            self.server_write_iv = key_material[offset:offset+iv_length]
+            
+            logger.info(f"CBC密钥材料派生完成 - MAC密钥: {len(self.client_write_mac_key)}字节, 加密密钥: {len(self.client_write_key)}字节, IV: {len(self.client_write_iv)}字节")
+            
+        elif self.cipher_suite == DTLSConstants.TLS_RSA_WITH_AES_128_GCM_SHA256:
+            # AES-128-GCM
             key_length = 16  # AES-128
             iv_length = 4    # GCM固定IV长度
+            
+            # 生成密钥材料
+            key_material_length = 2 * (key_length + iv_length)
+            key_material = self._prf(self.master_secret, seed, key_material_length)
+            
+            # 分配密钥
+            offset = 0
+            self.client_write_key = key_material[offset:offset+key_length]
+            offset += key_length
+            self.server_write_key = key_material[offset:offset+key_length]
+            offset += key_length
+            self.client_write_iv = key_material[offset:offset+iv_length]
+            offset += iv_length
+            self.server_write_iv = key_material[offset:offset+iv_length]
+            
+            logger.info(f"GCM密钥材料派生完成 - 加密密钥: {len(self.client_write_key)}字节, IV: {len(self.client_write_iv)}字节")
         else:
+            # 默认AES-256-GCM
             key_length = 32  # AES-256
             iv_length = 4
-        
-        # 生成密钥材料
-        key_material_length = 2 * (key_length + iv_length)
-        key_material = self._prf(self.master_secret, seed, key_material_length)
-        
-        # 分配密钥
-        offset = 0
-        self.client_write_key = key_material[offset:offset+key_length]
-        offset += key_length
-        self.server_write_key = key_material[offset:offset+key_length]
-        offset += key_length
-        self.client_write_iv = key_material[offset:offset+iv_length]
-        offset += iv_length
-        self.server_write_iv = key_material[offset:offset+iv_length]
-        
-        logger.info("密钥材料派生完成")
+            
+            key_material_length = 2 * (key_length + iv_length)
+            key_material = self._prf(self.master_secret, seed, key_material_length)
+            
+            offset = 0
+            self.client_write_key = key_material[offset:offset+key_length]
+            offset += key_length
+            self.server_write_key = key_material[offset:offset+key_length]
+            offset += key_length
+            self.client_write_iv = key_material[offset:offset+iv_length]
+            offset += iv_length
+            self.server_write_iv = key_material[offset:offset+iv_length]
+            
+            logger.info(f"默认GCM密钥材料派生完成 - 加密密钥: {len(self.client_write_key)}字节, IV: {len(self.client_write_iv)}字节")
     
     def _prf(self, secret: bytes, seed: bytes, length: int) -> bytes:
         """TLS伪随机函数 (简化实现)"""
