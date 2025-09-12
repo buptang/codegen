@@ -48,6 +48,7 @@ class DTLSConstants:
     
     # DTLS版本
     DTLS_1_0 = 0xFEFF  # DTLS 1.0版本
+    DTLS_1_2 = 0xFEFD  # DTLS 1.2版本
     
     # 握手消息类型
     CLIENT_HELLO = 1
@@ -387,10 +388,11 @@ class CompleteDTLSClient:
     def create_client_hello(self) -> bytes:
         """创建Client Hello消息"""
         # 生成客户端随机数
-        self.client_random = secrets.token_bytes(32)
+        if not self.client_random:
+            self.client_random = secrets.token_bytes(32)
         
         # 构造Client Hello - 符合DTLS标准格式
-        version = struct.pack('!H', DTLSConstants.DTLS_1_0)  # DTLS 1.2 = 0xFEFD
+        version = struct.pack('!H', DTLSConstants.DTLS_1_2)  # DTLS 1.2 = 0xFEFD
         random = self.client_random  # 32字节随机数
         
         # Session ID
@@ -414,8 +416,6 @@ class CompleteDTLSClient:
             DTLSConstants.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,    # 0xC030
             DTLSConstants.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,    # 0xC028
             DTLSConstants.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,       # 0xC013
-            DTLSConstants.TLS_RSA_WITH_AES_128_GCM_SHA256,          # 0x009C (原有)
-            DTLSConstants.TLS_RSA_WITH_AES_256_GCM_SHA384,          # 0x009D (原有)
             DTLSConstants.TLS_EMPTY_RENEGOTIATION_INFO_SCSV         # 0x00FF
         ]
         
