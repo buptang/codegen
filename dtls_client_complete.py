@@ -692,8 +692,8 @@ class CompleteDTLSClient:
             cipher_suite_offset = session_id_end
             self.cipher_suite = struct.unpack('!H', data[cipher_suite_offset:cipher_suite_offset+2])[0]
             
-            # 重新初始化记录层以传递密码套件信息
-            self.record_layer = DTLSRecord(self.cipher_suite)
+            # 更新记录层的密码套件信息，但保持序号和epoch不变
+            self.record_layer.cipher_suite = self.cipher_suite
             
             # 解析压缩方法
             compression_offset = cipher_suite_offset + 2
