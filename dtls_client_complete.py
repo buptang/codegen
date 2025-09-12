@@ -1124,6 +1124,28 @@ class CompleteDTLSClient:
             self.server_write_iv = key_material[offset:offset+iv_length]
             
             logger.info(f"GCM密钥材料派生完成 - 加密密钥: {len(self.client_write_key)}字节, IV: {len(self.client_write_iv)}字节")
+
+        elif self.cipher_suite == DTLSConstants.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:
+            # ECDHE-RSA with AES-128-GCM
+            key_length = 16  # AES-128
+            iv_length = 4    # GCM固定IV长度
+            
+            # 生成密钥材料
+            key_material_length = 2 * (key_length + iv_length)
+            key_material = self._prf(self.master_secret, seed, key_material_length)
+            
+            # 分配密钥
+            offset = 0
+            self.client_write_key = key_material[offset:offset+key_length]
+            offset += key_length
+            self.server_write_key = key_material[offset:offset+key_length]
+            offset += key_length
+            self.client_write_iv = key_material[offset:offset+iv_length]
+            offset += iv_length
+            self.server_write_iv = key_material[offset:offset+iv_length]
+            
+            logger.info(f"ECDHE-GCM密钥材料派生完成 - 加密密钥: {len(self.client_write_key)}字节, IV: {len(self.client_write_iv)}字节")
+            
         else:
             # 默认AES-256-GCM
             key_length = 32  # AES-256
