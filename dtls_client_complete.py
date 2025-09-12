@@ -31,6 +31,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 import datetime
 import ipaddress
 import secrets
+import sys
 
 # 配置日志
 logging.basicConfig(
@@ -1514,8 +1515,17 @@ def main():
     print("✅ 真正的密钥协商和加密通信")
     print("✅ 支持RSA密钥交换和AES-GCM加密")
     print()
+    try:
+        host = sys.argv[1]
+    except:
+        host = 'localhost'
+
+    try:
+        port = int(sys.argv[2])
+    except:
+        port = 443
     
-    client = CompleteDTLSClient(server_host='localhost', server_port=443)
+    client = CompleteDTLSClient(server_host=host, server_port=port)
     
     try:
         # 执行完整握手
