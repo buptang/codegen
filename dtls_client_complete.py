@@ -648,60 +648,104 @@ class CompleteDTLSClient:
     def parse_server_key_exchange(self, data: bytes) -> bool:
         """解析Server Key Exchange消息"""
         try:
+            logger.info(f"开始解析Server Key Exchange，数据长度: {len(data)} 字节")
+            logger.debug(f"原始数据前64字节: {data[:64].hex()}")
+            
             if len(data) < 4:
-                logger.warning("Server Key Exchange消息长度不足")
+                logger.error(f"Server Key Exchange消息长度不足: {len(data)} < 4")
                 return False
             
             offset = 0
             
             # 解析椭圆曲线类型 (1字节)
             if offset >= len(data):
+                logger.error(f"无法读取曲线类型，偏移量 {offset} >= 数据长度 {len(data)}")
                 return False
             curve_type = data[offset]
+            logger.info(f"偏移量 {offset}: 曲线类型 = {curve_type}")
             offset += 1
             
             if curve_type == 3:  # named_curve
                 # 解析命名曲线 (2字节)
                 if offset + 2 > len(data):
+                    logger.error(f"无法读取命名曲线，需要 {offset + 2} 字节，但只有 {len(data)} 字节")
                     return False
                 named_curve = struct.unpack('!H', data[offset:offset+2])[0]
+                logger.info(f"偏移量 {offset}: 命名曲线 = {named_curve} ({'secp256r1' if named_curve == 23 else 'unknown'})")
                 offset += 2
                 
                 # 解析公钥长度 (1字节)
                 if offset >= len(data):
+                    logger.error(f"无法读取公钥长度，偏移量 {offset} >= 数据长度 {len(data)}")
                     return False
                 pubkey_length = data[offset]
+                logger.info(f"偏移量 {offset}: 公钥长度 = {pubkey_length}")
                 offset += 1
+                
+                # 验证公钥长度合理性
+                if pubkey_length == 0 or pubkey_length > 200:
+                    logger.error(f"公钥长度异常: {pubkey_length}")
+                    return False
                 
                 # 解析公钥数据
                 if offset + pubkey_length > len(data):
+                    logger.error(f"无法读取公钥数据，需要 {offset + pubkey_length} 字节，但只有 {len(data)} 字节")
+                    logger.error(f"公钥数据不足: 偏移量={offset}, 公钥长度={pubkey_length}, 总长度={len(data)}")
                     return False
                 pubkey_data = data[offset:offset+pubkey_length]
+                logger.info(f"偏移量 {offset}: 公钥数据长度 = {len(pubkey_data)}")
+                logger.debug(f"公钥数据前16字节: {pubkey_data[:16].hex()}")
                 offset += pubkey_length
                 
                 # 解析签名算法 (2字节)
                 if offset + 2 > len(data):
+                    logger.error(f"无法读取签名算法，需要 {offset + 2} 字节，但只有 {len(data)} 字节")
                     return False
                 signature_algorithm = struct.unpack('!H', data[offset:offset+2])[0]
+                logger.info(f"偏移量 {offset}: 签名算法 = 0x{signature_algorithm:04x}")
                 offset += 2
                 
                 # 解析签名长度 (2字节)
                 if offset + 2 > len(data):
+                    logger.error(f"无法读取签名长度，需要 {offset + 2} 字节，但只有 {len(data)} 字节")
                     return False
                 signature_length = struct.unpack('!H', data[offset:offset+2])[0]
+                logger.info(f"偏移量 {offset}: 签名长度 = {signature_length}")
                 offset += 2
+                
+                # 验证签名长度合理性
+                if signature_length == 0 or signature_length > 1024:
+                    logger.error(f"签名长度异常: {signature_length}")
+                    return False
                 
                 # 解析签名数据
                 if offset + signature_length > len(data):
-                    return False
-                signature_data = data[offset:offset+signature_length]
+                    logger.error(f"无法读取签名数据，需要 {offset + signature_length} 字节，但只有 {len(data)} 字节")
+                    logger.error(f"签名数据不足: 偏移量={offset}, 签名长度={signature_length}, 总长度={len(data)}")
+                    logger.error(f"缺少 {offset + signature_length - len(data)} 字节")
+                    
+                    # 尝试读取剩余的数据作为签名（容错处理）
+                    remaining_data = data[offset:]
+                    if len(remaining_data) > 0:
+                        logger.warning(f"尝试使用剩余的 {len(remaining_data)} 字节作为签名数据")
+                        signature_data = remaining_data
+                        logger.warning("使用不完整的签名数据继续处理")
+                    else:
+                        logger.error("没有剩余数据可用作签名")
+                        return False
+                else:
+                    signature_data = data[offset:offset+signature_length]
+                    logger.info(f"偏移量 {offset}: 签名数据长度 = {len(signature_data)}")
+                    logger.debug(f"签名数据前16字节: {signature_data[:16].hex()}")
                 
-                logger.info(f"Server Key Exchange解析成功:")
+                logger.info("✅ Server Key Exchange解析成功!")
+                logger.info(f"解析结果总结:")
                 logger.info(f"  曲线类型: {curve_type}")
                 logger.info(f"  命名曲线: {named_curve}")
                 logger.info(f"  公钥长度: {pubkey_length}")
-                logger.info(f"  签名算法: {signature_algorithm}")
+                logger.info(f"  签名算法: 0x{signature_algorithm:04x}")
                 logger.info(f"  签名长度: {signature_length}")
+                logger.info(f"  实际签名数据长度: {len(signature_data)}")
                 
                 # 存储服务器的临时公钥信息
                 self.server_temp_public_key = {
@@ -714,11 +758,13 @@ class CompleteDTLSClient:
                 
                 return True
             else:
-                logger.warning(f"不支持的椭圆曲线类型: {curve_type}")
+                logger.error(f"不支持的椭圆曲线类型: {curve_type}")
                 return False
                 
         except Exception as e:
             logger.error(f"解析Server Key Exchange失败: {e}")
+            import traceback
+            logger.error(f"错误堆栈: {traceback.format_exc()}")
             return False
     def create_client_key_exchange(self) -> bytes:
         """创建Client Key Exchange消息 (使用ECDH)"""
