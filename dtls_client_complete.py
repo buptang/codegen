@@ -65,6 +65,14 @@ class DTLSConstants:
     TLS_RSA_WITH_AES_128_GCM_SHA256 = 0x009C
     TLS_RSA_WITH_AES_256_GCM_SHA384 = 0x009D
     
+    # 新增的ECDHE密码套件
+    TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 = 0xC02C  # ECDHE-ECDSA-AES256-GCM-SHA384
+    TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 = 0xC02B  # ECDHE-ECDSA-AES128-GCM-SHA256
+    TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 = 0xC030    # ECDHE-RSA-AES256-GCM-SHA384
+    TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 = 0xC028    # ECDHE-RSA-AES128-GCM-SHA256
+    TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA = 0xC013       # ECDHE-RSA-AES128-SHA
+    TLS_EMPTY_RENEGOTIATION_INFO_SCSV = 0x00FF        # 重新协商指示
+    
     # 压缩方法
     COMPRESSION_NULL = 0
     
@@ -396,10 +404,29 @@ class CompleteDTLSClient:
             cookie = b""
             logger.debug("发送初始Client Hello (无Cookie)")
         
-        # 密码套件列表
-        cipher_suites_length = struct.pack('!H', 2)  # 1个密码套件 = 2字节
-        cipher_suite = struct.pack('!H', DTLSConstants.TLS_RSA_WITH_AES_128_GCM_SHA256)
-        cipher_suites = cipher_suites_length + cipher_suite
+        # 密码套件列表 - 包含所有支持的密码套件
+        supported_cipher_suites = [
+            DTLSConstants.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,  # 0xC02C
+            DTLSConstants.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,  # 0xC02B
+            DTLSConstants.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,    # 0xC030
+            DTLSConstants.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,    # 0xC028
+            DTLSConstants.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,       # 0xC013
+            DTLSConstants.TLS_RSA_WITH_AES_128_GCM_SHA256,          # 0x009C (原有)
+            DTLSConstants.TLS_RSA_WITH_AES_256_GCM_SHA384,          # 0x009D (原有)
+            DTLSConstants.TLS_EMPTY_RENEGOTIATION_INFO_SCSV         # 0x00FF
+        ]
+        
+        # 构造密码套件数据
+        cipher_suites_data = b''
+        for suite in supported_cipher_suites:
+            cipher_suites_data += struct.pack('!H', suite)
+        
+        cipher_suites_length = struct.pack('!H', len(cipher_suites_data))
+        cipher_suites = cipher_suites_length + cipher_suites_data
+        
+        logger.info(f"支持的密码套件数量: {len(supported_cipher_suites)}")
+        for i, suite in enumerate(supported_cipher_suites):
+            logger.debug(f"密码套件 {i+1}: 0x{suite:04X}")
         
         # 压缩方法
         compression_methods_length = struct.pack('!B', 1)  # 1个压缩方法

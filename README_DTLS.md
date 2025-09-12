@@ -22,10 +22,21 @@
 - ✅ **Session Ticket** - 会话票据
 
 ### 安全特性
-- 🔐 支持多种密码套件
+- 🔐 支持多种现代密码套件
+- 🔐 ECDHE 前向安全性密钥交换
 - 🔐 RSA 和 ECDSA 签名算法
-- 🔐 AES-GCM 加密
-- 🔐 完整性验证
+- 🔐 AES-GCM 和 AES-CBC 加密
+- 🔐 完整性验证和重新协商保护
+
+### 支持的密码套件
+- ✅ **TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384** (0xC02C) - 最高安全级别
+- ✅ **TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256** (0xC02B) - ECDSA + AES-128-GCM
+- ✅ **TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384** (0xC030) - RSA + AES-256-GCM
+- ✅ **TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256** (0xC028) - RSA + AES-128-GCM
+- ✅ **TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA** (0xC013) - 传统CBC模式
+- ✅ **TLS_RSA_WITH_AES_128_GCM_SHA256** (0x009C) - 基础RSA套件
+- ✅ **TLS_RSA_WITH_AES_256_GCM_SHA384** (0x009D) - RSA + AES-256
+- ✅ **TLS_EMPTY_RENEGOTIATION_INFO_SCSV** (0x00FF) - 重新协商保护
 
 ## 📁 文件结构
 
@@ -240,4 +251,3 @@ client.connect('127.0.0.1', 4433)
 ---
 
 **注意**: 这是一个教育和测试用途的实现。在生产环境中使用前，请进行充分的安全审计和测试。
-

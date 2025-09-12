@@ -53,6 +53,14 @@ class DTLSConstants:
     TLS_RSA_WITH_AES_128_GCM_SHA256 = 0x009C
     TLS_RSA_WITH_AES_256_GCM_SHA384 = 0x009D
     
+    # 新增的ECDHE密码套件
+    TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 = 0xC02C  # ECDHE-ECDSA-AES256-GCM-SHA384
+    TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 = 0xC02B  # ECDHE-ECDSA-AES128-GCM-SHA256
+    TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 = 0xC030    # ECDHE-RSA-AES256-GCM-SHA384
+    TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 = 0xC028    # ECDHE-RSA-AES128-GCM-SHA256
+    TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA = 0xC013       # ECDHE-RSA-AES128-SHA
+    TLS_EMPTY_RENEGOTIATION_INFO_SCSV = 0x00FF        # 重新协商指示
+    
     # 压缩方法
     COMPRESSION_NULL = 0
     
@@ -401,6 +409,39 @@ class DTLSServerSession:
             cipher_suites = data[offset:offset+cipher_suites_length]
             offset += cipher_suites_length
             logger.debug(f"密码套件: {cipher_suites.hex()}")
+            
+            # 解析客户端支持的密码套件
+            client_cipher_suites = []
+            for i in range(0, len(cipher_suites), 2):
+                if i + 1 < len(cipher_suites):
+                    suite = struct.unpack('!H', cipher_suites[i:i+2])[0]
+                    client_cipher_suites.append(suite)
+                    logger.debug(f"客户端支持密码套件: 0x{suite:04X}")
+            
+            # 选择服务器支持的密码套件（按优先级顺序）
+            server_preferred_suites = [
+                DTLSConstants.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,  # 0xC02C
+                DTLSConstants.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,  # 0xC02B
+                DTLSConstants.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,    # 0xC030
+                DTLSConstants.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,    # 0xC028
+                DTLSConstants.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,       # 0xC013
+                DTLSConstants.TLS_RSA_WITH_AES_256_GCM_SHA384,          # 0x009D
+                DTLSConstants.TLS_RSA_WITH_AES_128_GCM_SHA256,          # 0x009C
+            ]
+            
+            # 选择第一个匹配的密码套件
+            selected_cipher_suite = None
+            for suite in server_preferred_suites:
+                if suite in client_cipher_suites:
+                    selected_cipher_suite = suite
+                    break
+            
+            if selected_cipher_suite:
+                self.cipher_suite = selected_cipher_suite
+                logger.info(f"选择密码套件: 0x{selected_cipher_suite:04X}")
+            else:
+                logger.error("没有找到匹配的密码套件")
+                return
             
             # 压缩方法
             if offset + 1 > len(data):
