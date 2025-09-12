@@ -55,6 +55,16 @@ class DTLSConstants:
     
     # 压缩方法
     COMPRESSION_NULL = 0
+    
+    # TLS扩展类型
+    EXTENSION_SERVER_NAME = 0x0000              # SNI扩展
+    EXTENSION_STATUS_REQUEST = 0x0005           # OCSP状态请求
+    EXTENSION_SUPPORTED_GROUPS = 0x000A         # 支持的椭圆曲线组
+    EXTENSION_EC_POINT_FORMATS = 0x000B         # EC点格式
+    EXTENSION_SIGNATURE_ALGORITHMS = 0x000D     # 签名算法
+    EXTENSION_ENCRYPT_THEN_MAC = 0x0016         # 先加密后MAC
+    EXTENSION_EXTENDED_MASTER_SECRET = 0x0017   # 扩展主密钥
+    EXTENSION_SESSION_TICKET = 0x0023           # 会话票据
 
 
 # 配置日志
@@ -392,6 +402,24 @@ class DTLSServerSession:
             offset += cipher_suites_length
             logger.debug(f"密码套件: {cipher_suites.hex()}")
             
+            # 压缩方法
+            if offset + 1 > len(data):
+                logger.error("数据不足以读取压缩方法长度")
+                return
+            compression_methods_length = data[offset]
+            offset += 1
+            
+            if offset + compression_methods_length > len(data):
+                logger.error("数据不足以读取压缩方法")
+                return
+            compression_methods = data[offset:offset+compression_methods_length]
+            offset += compression_methods_length
+            logger.debug(f"压缩方法: {compression_methods.hex()}")
+            
+            # 解析扩展（如果存在）
+            if offset < len(data):
+                self.parse_extensions(data[offset:])
+            
             # 生成服务器随机数
             self.server_random = secrets.token_bytes(32)
             
@@ -408,6 +436,83 @@ class DTLSServerSession:
             
         except Exception as e:
             logger.error(f"处理Client Hello失败: {e}")
+    
+    def parse_extensions(self, extensions_data: bytes):
+        """解析Client Hello中的扩展"""
+        if len(extensions_data) < 2:
+            return
+        
+        # 扩展总长度
+        extensions_length = struct.unpack('!H', extensions_data[0:2])[0]
+        offset = 2
+        
+        logger.info(f"扩展总长度: {extensions_length}")
+        
+        while offset < len(extensions_data) and offset < extensions_length + 2:
+            if offset + 4 > len(extensions_data):
+                break
+            
+            # 扩展类型和长度
+            extension_type = struct.unpack('!H', extensions_data[offset:offset+2])[0]
+            extension_length = struct.unpack('!H', extensions_data[offset+2:offset+4])[0]
+            offset += 4
+            
+            if offset + extension_length > len(extensions_data):
+                break
+            
+            extension_data = extensions_data[offset:offset+extension_length]
+            offset += extension_length
+            
+            # 解析具体扩展
+            self.parse_extension(extension_type, extension_data)
+    
+    def parse_extension(self, extension_type: int, extension_data: bytes):
+        """解析单个扩展"""
+        if extension_type == DTLSConstants.EXTENSION_SERVER_NAME:
+            self.parse_sni_extension(extension_data)
+        elif extension_type == DTLSConstants.EXTENSION_EC_POINT_FORMATS:
+            logger.info("收到EC点格式扩展")
+        elif extension_type == DTLSConstants.EXTENSION_SUPPORTED_GROUPS:
+            logger.info("收到支持的椭圆曲线组扩展")
+        elif extension_type == DTLSConstants.EXTENSION_SIGNATURE_ALGORITHMS:
+            logger.info("收到签名算法扩展")
+        elif extension_type == DTLSConstants.EXTENSION_STATUS_REQUEST:
+            logger.info("收到OCSP状态请求扩展")
+        elif extension_type == DTLSConstants.EXTENSION_ENCRYPT_THEN_MAC:
+            logger.info("收到先加密后MAC扩展")
+        elif extension_type == DTLSConstants.EXTENSION_EXTENDED_MASTER_SECRET:
+            logger.info("收到扩展主密钥扩展")
+        elif extension_type == DTLSConstants.EXTENSION_SESSION_TICKET:
+            logger.info("收到会话票据扩展")
+        else:
+            logger.info(f"收到未知扩展类型: 0x{extension_type:04x}")
+    
+    def parse_sni_extension(self, extension_data: bytes):
+        """解析SNI扩展"""
+        if len(extension_data) < 2:
+            return
+        
+        # 服务器名称列表长度
+        server_name_list_length = struct.unpack('!H', extension_data[0:2])[0]
+        offset = 2
+        
+        while offset < len(extension_data) and offset < server_name_list_length + 2:
+            if offset + 3 > len(extension_data):
+                break
+            
+            # 名称类型和长度
+            name_type = extension_data[offset]
+            name_length = struct.unpack('!H', extension_data[offset+1:offset+3])[0]
+            offset += 3
+            
+            if offset + name_length > len(extension_data):
+                break
+            
+            if name_type == 0:  # hostname
+                server_name = extension_data[offset:offset+name_length].decode('utf-8')
+                logger.info(f"收到SNI扩展，服务器名称: {server_name}")
+            
+            offset += name_length
     
     def send_server_hello(self):
         """发送Server Hello消息"""

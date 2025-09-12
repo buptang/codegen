@@ -69,10 +69,33 @@ class DTLSConstants:
     COMPRESSION_NULL = 0
     
     # TLS扩展类型
-    EXTENSION_SERVER_NAME = 0x0000  # SNI扩展
+    EXTENSION_SERVER_NAME = 0x0000              # SNI扩展
+    EXTENSION_STATUS_REQUEST = 0x0005           # OCSP状态请求
+    EXTENSION_SUPPORTED_GROUPS = 0x000A         # 支持的椭圆曲线组
+    EXTENSION_EC_POINT_FORMATS = 0x000B         # EC点格式
+    EXTENSION_SIGNATURE_ALGORITHMS = 0x000D     # 签名算法
+    EXTENSION_ENCRYPT_THEN_MAC = 0x0016         # 先加密后MAC
+    EXTENSION_EXTENDED_MASTER_SECRET = 0x0017   # 扩展主密钥
+    EXTENSION_SESSION_TICKET = 0x0023           # 会话票据
     
     # SNI名称类型
     SNI_NAME_TYPE_HOSTNAME = 0x00
+    
+    # EC点格式
+    EC_POINT_FORMAT_UNCOMPRESSED = 0x00
+    
+    # 支持的椭圆曲线组
+    SECP256R1 = 0x0017  # P-256
+    SECP384R1 = 0x0018  # P-384
+    SECP521R1 = 0x0019  # P-521
+    X25519 = 0x001D     # X25519
+    
+    # 签名算法
+    RSA_PKCS1_SHA256 = 0x0401
+    RSA_PKCS1_SHA384 = 0x0501
+    RSA_PKCS1_SHA512 = 0x0601
+    ECDSA_SECP256R1_SHA256 = 0x0403
+    ECDSA_SECP384R1_SHA384 = 0x0503
 
 
 class DTLSRecord:
@@ -255,6 +278,100 @@ class CompleteDTLSClient:
         ) + extension_data
         
         return sni_extension
+
+    def create_ec_point_formats_extension(self) -> bytes:
+        """创建EC点格式扩展"""
+        # 支持的EC点格式列表
+        point_formats = [DTLSConstants.EC_POINT_FORMAT_UNCOMPRESSED]
+        
+        # 扩展数据：点格式列表长度 + 点格式列表
+        extension_data = struct.pack("!B", len(point_formats)) + bytes(point_formats)
+        
+        # 完整的扩展
+        return struct.pack("!HH", 
+            DTLSConstants.EXTENSION_EC_POINT_FORMATS,
+            len(extension_data)
+        ) + extension_data
+    
+    def create_supported_groups_extension(self) -> bytes:
+        """创建支持的椭圆曲线组扩展"""
+        # 支持的椭圆曲线组
+        supported_groups = [
+            DTLSConstants.SECP256R1,  # P-256
+            DTLSConstants.SECP384R1,  # P-384
+            DTLSConstants.SECP521R1,  # P-521
+            DTLSConstants.X25519      # X25519
+        ]
+        
+        # 扩展数据：组列表长度 + 组列表
+        groups_data = b"".join(struct.pack("!H", group) for group in supported_groups)
+        extension_data = struct.pack("!H", len(groups_data)) + groups_data
+        
+        return struct.pack("!HH",
+            DTLSConstants.EXTENSION_SUPPORTED_GROUPS,
+            len(extension_data)
+        ) + extension_data
+    
+    def create_signature_algorithms_extension(self) -> bytes:
+        """创建签名算法扩展"""
+        # 支持的签名算法
+        signature_algorithms = [
+            DTLSConstants.RSA_PKCS1_SHA256,
+            DTLSConstants.RSA_PKCS1_SHA384,
+            DTLSConstants.RSA_PKCS1_SHA512,
+            DTLSConstants.ECDSA_SECP256R1_SHA256,
+            DTLSConstants.ECDSA_SECP384R1_SHA384
+        ]
+        
+        # 扩展数据：算法列表长度 + 算法列表
+        algorithms_data = b"".join(struct.pack("!H", alg) for alg in signature_algorithms)
+        extension_data = struct.pack("!H", len(algorithms_data)) + algorithms_data
+        
+        return struct.pack("!HH",
+            DTLSConstants.EXTENSION_SIGNATURE_ALGORITHMS,
+            len(extension_data)
+        ) + extension_data
+    
+    def create_status_request_extension(self) -> bytes:
+        """创建OCSP状态请求扩展"""
+        # OCSP状态请求类型 (1 = ocsp)
+        status_type = 1
+        # 请求者ID列表长度 (0 = 空)
+        responder_id_list_length = 0
+        # 请求扩展长度 (0 = 空)
+        request_extensions_length = 0
+        
+        extension_data = struct.pack("!BHH", 
+            status_type,
+            responder_id_list_length,
+            request_extensions_length
+        )
+        
+        return struct.pack("!HH",
+            DTLSConstants.EXTENSION_STATUS_REQUEST,
+            len(extension_data)
+        ) + extension_data
+    
+    def create_encrypt_then_mac_extension(self) -> bytes:
+        """创建先加密后MAC扩展（空扩展）"""
+        return struct.pack("!HH",
+            DTLSConstants.EXTENSION_ENCRYPT_THEN_MAC,
+            0  # 扩展数据长度为0
+        )
+    
+    def create_extended_master_secret_extension(self) -> bytes:
+        """创建扩展主密钥扩展（空扩展）"""
+        return struct.pack("!HH",
+            DTLSConstants.EXTENSION_EXTENDED_MASTER_SECRET,
+            0  # 扩展数据长度为0
+        )
+    
+    def create_session_ticket_extension(self) -> bytes:
+        """创建会话票据扩展（空扩展，表示支持会话票据）"""
+        return struct.pack("!HH",
+            DTLSConstants.EXTENSION_SESSION_TICKET,
+            0  # 扩展数据长度为0
+        )
     
     def create_client_hello(self) -> bytes:
         """创建Client Hello消息"""
@@ -291,11 +408,47 @@ class CompleteDTLSClient:
         
         # 扩展
         extensions = b''
+        
+        # 添加SNI扩展（如果指定了服务器名称）
         if self.server_name:
-            # 添加SNI扩展
             sni_extension = self.create_sni_extension(self.server_name)
             extensions += sni_extension
             logger.info(f"添加SNI扩展，服务器名称: {self.server_name}")
+        
+        # 添加EC点格式扩展
+        ec_point_formats_ext = self.create_ec_point_formats_extension()
+        extensions += ec_point_formats_ext
+        logger.info("添加EC点格式扩展")
+        
+        # 添加支持的椭圆曲线组扩展
+        supported_groups_ext = self.create_supported_groups_extension()
+        extensions += supported_groups_ext
+        logger.info("添加支持的椭圆曲线组扩展")
+        
+        # 添加签名算法扩展
+        signature_algorithms_ext = self.create_signature_algorithms_extension()
+        extensions += signature_algorithms_ext
+        logger.info("添加签名算法扩展")
+        
+        # 添加OCSP状态请求扩展
+        status_request_ext = self.create_status_request_extension()
+        extensions += status_request_ext
+        logger.info("添加OCSP状态请求扩展")
+        
+        # 添加先加密后MAC扩展
+        encrypt_then_mac_ext = self.create_encrypt_then_mac_extension()
+        extensions += encrypt_then_mac_ext
+        logger.info("添加先加密后MAC扩展")
+        
+        # 添加扩展主密钥扩展
+        extended_master_secret_ext = self.create_extended_master_secret_extension()
+        extensions += extended_master_secret_ext
+        logger.info("添加扩展主密钥扩展")
+        
+        # 添加会话票据扩展
+        session_ticket_ext = self.create_session_ticket_extension()
+        extensions += session_ticket_ext
+        logger.info("添加会话票据扩展")
         
         extensions_length = struct.pack('!H', len(extensions))
         
