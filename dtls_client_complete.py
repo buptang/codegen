@@ -114,21 +114,65 @@ class DTLSRecord:
     def __init__(self):
         self.sequence_number = 0
         self.epoch = 0
+        self.encryption_enabled = False
+        self.cipher = None
+        self.client_write_key = None
+        self.client_write_iv = None
     
     def create_record(self, content_type: int, data: bytes) -> bytes:
         """创建DTLS记录"""
         version = DTLSConstants.DTLS_1_0
+        
+        # 如果启用了加密，则加密数据
+        if self.encryption_enabled and self.cipher and content_type == DTLSConstants.HANDSHAKE:
+            data = self._encrypt_data(content_type, data)
+        
         length = len(data)
         
         # DTLS记录格式: type(1) + version(2) + epoch(2) + sequence(6) + length(2) + data
-        record = (struct.pack('!BHH', content_type, version, self.epoch) +
-                 struct.pack('!Q', self.sequence_number)[2:] +  # 6字节序列号
-                 struct.pack('!H', length) + 
+        record = (struct.pack("!BHH", content_type, version, self.epoch) +
+                 struct.pack("!Q", self.sequence_number)[2:] +  # 6字节序列号
+                 struct.pack("!H", length) + 
                  data)
         
         self.sequence_number += 1
         return record
     
+    def enable_encryption(self, client_write_key: bytes, client_write_iv: bytes):
+        """启用记录层加密"""
+        self.encryption_enabled = True
+        self.client_write_key = client_write_key
+        self.client_write_iv = client_write_iv
+        self.epoch += 1  # Change Cipher Spec后epoch增加
+        self.sequence_number = 0  # 重置序列号
+        
+        # 创建AES-GCM加密器
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        self.cipher = AESGCM(client_write_key)
+        logger.info("记录层加密已启用")
+    
+    def _encrypt_data(self, content_type: int, data: bytes) -> bytes:
+        """加密记录数据"""
+        if not self.cipher or not self.client_write_iv:
+            return data
+        
+        try:
+            # 构造nonce (IV + sequence_number)
+            nonce = self.client_write_iv + struct.pack("!Q", self.sequence_number)
+            
+            # 构造附加认证数据 (AAD)
+            aad = (struct.pack("!Q", self.sequence_number)[2:] +  # 6字节序列号
+                   struct.pack("!BHH", content_type, DTLSConstants.DTLS_1_0, self.epoch) +
+                   struct.pack("!H", len(data)))
+            
+            # 使用AES-GCM加密
+            encrypted_data = self.cipher.encrypt(nonce, data, aad)
+            logger.debug(f"数据加密成功，原长度: {len(data)}, 加密后长度: {len(encrypted_data)}")
+            return encrypted_data
+        except Exception as e:
+            logger.error(f"数据加密失败: {e}")
+            return data
+
     def parse_record(self, data: bytes) -> Tuple[int, bytes]:
         """解析DTLS记录"""
         if len(data) < 13:
@@ -708,15 +752,14 @@ class CompleteDTLSClient:
             self.client_ecdh_private_key = ec.generate_private_key(curve)
             self.client_ecdh_public_key = self.client_ecdh_private_key.public_key()
             
-            # 序列化客户端公钥
-            client_public_key_bytes = self.client_ecdh_public_key.public_numbers().x.to_bytes(
-                (curve.key_size + 7) // 8, 'big'
-            ) + self.client_ecdh_public_key.public_numbers().y.to_bytes(
-                (curve.key_size + 7) // 8, 'big'
+            # 使用标准的椭圆曲线公钥序列化方式
+            client_public_key_data = self.client_ecdh_public_key.public_bytes(
+                encoding=serialization.Encoding.X962,
+                format=serialization.PublicFormat.UncompressedPoint
             )
             
-            # 添加未压缩点格式标识符
-            client_public_key_data = b'\x04' + client_public_key_bytes
+            logger.info(f"客户端ECDH公钥序列化完成，长度: {len(client_public_key_data)} 字节")
+            logger.debug(f"公钥数据: {client_public_key_data.hex()}")
             
             # 执行ECDH计算生成预主密钥
             server_public_key_data = self.server_temp_public_key['public_key']
@@ -763,22 +806,32 @@ class CompleteDTLSClient:
     
     def _reconstruct_server_public_key(self, public_key_data: bytes, curve) -> ec.EllipticCurvePublicKey:
         """从服务器公钥数据重构椭圆曲线公钥"""
-        if len(public_key_data) == 0 or public_key_data[0] != 0x04:
-            raise ValueError("无效的椭圆曲线公钥格式")
-        
-        # 去掉未压缩点格式标识符
-        key_data = public_key_data[1:]
-        
-        # 计算坐标长度
-        coord_length = len(key_data) // 2
-        
-        # 提取x和y坐标
-        x = int.from_bytes(key_data[:coord_length], 'big')
-        y = int.from_bytes(key_data[coord_length:], 'big')
-        
-        # 创建公钥
-        public_numbers = ec.EllipticCurvePublicNumbers(x, y, curve)
-        return public_numbers.public_key()
+        try:
+            # 使用标准的椭圆曲线公钥反序列化方式
+            server_public_key = ec.EllipticCurvePublicKey.from_encoded_point(curve, public_key_data)
+            logger.info(f"服务器ECDH公钥重构成功，数据长度: {len(public_key_data)} 字节")
+            logger.debug(f"服务器公钥数据: {public_key_data.hex()}")
+            return server_public_key
+        except Exception as e:
+            logger.error(f"服务器公钥重构失败: {e}")
+            # 回退到手动解析方式
+            if len(public_key_data) == 0 or public_key_data[0] != 0x04:
+                raise ValueError("无效的椭圆曲线公钥格式")
+            
+            # 去掉未压缩点格式标识符
+            key_data = public_key_data[1:]
+            
+            # 计算坐标长度
+            coord_length = len(key_data) // 2
+            
+            # 提取x和y坐标
+            x = int.from_bytes(key_data[:coord_length], 'big')
+            y = int.from_bytes(key_data[coord_length:], 'big')
+            
+            # 创建公钥
+            public_numbers = ec.EllipticCurvePublicNumbers(x, y, curve)
+            return public_numbers.public_key()
+    
     
     def create_bundled_client_messages(self) -> bytes:
         """创建合并的客户端消息包 (Client Key Exchange + Change Cipher Spec + Finished)"""
@@ -793,22 +846,27 @@ class CompleteDTLSClient:
             self.derive_master_secret()
             self.derive_key_material()
             
-            # 2. 创建Change Cipher Spec消息
+            # 将Client Key Exchange包装为记录（未加密）
+            client_key_exchange_record = self.record_layer.create_record(
+                DTLSConstants.HANDSHAKE, client_key_exchange)
+            
+            # 2. 创建Change Cipher Spec消息（未加密）
             change_cipher_spec = struct.pack('!B', 1)
             change_cipher_spec_record = self.record_layer.create_record(
                 DTLSConstants.CHANGE_CIPHER_SPEC, change_cipher_spec)
             
-            # 3. 创建Finished消息
+            # 3. 启用记录层加密（在Change Cipher Spec之后）
+            if hasattr(self, 'client_write_key') and hasattr(self, 'client_write_iv'):
+                self.record_layer.enable_encryption(self.client_write_key, self.client_write_iv)
+                logger.info("Change Cipher Spec后启用加密")
+            
+            # 4. 创建Finished消息（将被加密）
             finished = self.create_finished_message()
             if not finished:
                 logger.error("创建Finished消息失败")
                 return b''
             
-            # 将Client Key Exchange包装为记录
-            client_key_exchange_record = self.record_layer.create_record(
-                DTLSConstants.HANDSHAKE, client_key_exchange)
-            
-            # 将Finished消息包装为记录
+            # 将Finished消息包装为记录（加密）
             finished_record = self.record_layer.create_record(
                 DTLSConstants.HANDSHAKE, finished)
             
@@ -820,14 +878,14 @@ class CompleteDTLSClient:
             logger.info(f"创建合并消息包成功，总长度: {len(bundled_message)} 字节")
             logger.info(f"- Client Key Exchange: {len(client_key_exchange_record)} 字节")
             logger.info(f"- Change Cipher Spec: {len(change_cipher_spec_record)} 字节") 
-            logger.info(f"- Finished: {len(finished_record)} 字节")
+            logger.info(f"- Finished (加密): {len(finished_record)} 字节")
             
             return bundled_message
             
         except Exception as e:
             logger.error(f"创建合并消息包失败: {e}")
             return b''
-    
+
     def derive_master_secret(self):
         """派生主密钥"""
         if not self.pre_master_secret or not self.client_random or not self.server_random:
