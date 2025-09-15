@@ -230,7 +230,9 @@ class DTLSRecord:
         
         # 1. 计算HMAC-SHA1
         # 构造MAC数据: seq_num + type + version + length + data
-        mac_data = (struct.pack("!Q", self.sequence_number)[2:] +  # 6字节序列号
+        # 注意：TLS/DTLS MAC计算使用完整的8字节序列号
+        seq_num_8bytes = struct.pack("!Q", self.sequence_number)
+        mac_data = (seq_num_8bytes +  # 完整的8字节序列号
                    struct.pack("!BHH", content_type, DTLSConstants.DTLS_1_0, len(data)) +
                    data)
         
@@ -239,6 +241,7 @@ class DTLSRecord:
             h = hmac.HMAC(self.client_write_mac_key, hashes.SHA1())
             h.update(mac_data)
             mac = h.finalize()
+            logger.debug(f"CBC MAC计算: seq={self.sequence_number}, type={content_type}, data_len={len(data)}, mac={mac.hex()[:16]}...")
         else:
             # 如果没有MAC密钥，使用空MAC (不安全，仅用于测试)
             mac = b'\x00' * 20  # SHA1输出20字节
