@@ -128,7 +128,7 @@ class DTLSRecord:
         version = DTLSConstants.DTLS_1_0
         
         # 如果启用了加密，则加密数据
-        if self.encryption_enabled and (content_type == DTLSConstants.HANDSHAKE or content_type == DTLSConstants.APPLICATION_DATA):
+        if self.encryption_enabled and content_type == DTLSConstants.HANDSHAKE:
             # 检查是否有加密能力（CBC或GCM模式）
             has_cipher = (hasattr(self, 'cipher') and self.cipher) or \
                         (hasattr(self, 'cipher_algorithm') and self.cipher_algorithm)
@@ -230,9 +230,7 @@ class DTLSRecord:
         
         # 1. 计算HMAC-SHA1
         # 构造MAC数据: seq_num + type + version + length + data
-        # 注意：TLS/DTLS MAC计算使用完整的8字节序列号
-        seq_num_8bytes = struct.pack("!Q", self.sequence_number)
-        mac_data = (seq_num_8bytes +  # 完整的8字节序列号
+        mac_data = (struct.pack("!Q", self.sequence_number)[2:] +  # 6字节序列号
                    struct.pack("!BHH", content_type, DTLSConstants.DTLS_1_0, len(data)) +
                    data)
         
@@ -241,7 +239,6 @@ class DTLSRecord:
             h = hmac.HMAC(self.client_write_mac_key, hashes.SHA1())
             h.update(mac_data)
             mac = h.finalize()
-            logger.debug(f"CBC MAC计算: seq={self.sequence_number}, type={content_type}, data_len={len(data)}, mac={mac.hex()[:16]}...")
         else:
             # 如果没有MAC密钥，使用空MAC (不安全，仅用于测试)
             mac = b'\x00' * 20  # SHA1输出20字节
@@ -1192,15 +1189,8 @@ class CompleteDTLSClient:
     
     def create_finished(self) -> bytes:
         """创建Finished消息"""
-        # 根据密码套件选择哈希算法
-        if self.cipher_suite == DTLSConstants.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:
-            # CBC_SHA密码套件使用SHA-1和MD5的组合（TLS 1.2之前）或SHA-256（TLS 1.2）
-            # 但对于简化，我们使用SHA-1
-            handshake_hash = hashlib.sha1()
-        else:
-            # 其他密码套件使用SHA-256
-            handshake_hash = hashlib.sha256()
-            
+        # 计算所有握手消息的哈希
+        handshake_hash = hashlib.sha256()
         for msg in self.handshake_layer.handshake_messages:
             handshake_hash.update(msg)
         
@@ -1216,21 +1206,17 @@ class CompleteDTLSClient:
         if not self.encryption_enabled or not self.client_write_key:
             return plaintext
         
-        # 根据密码套件选择加密模式
-        if self.cipher_suite == DTLSConstants.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:
-            # 使用CBC模式加密
-            return self.record_layer._encrypt_data_cbc(DTLSConstants.APPLICATION_DATA, plaintext)
-        else:
-            # 使用AES-GCM加密（默认）
-            nonce = self.client_write_iv + secrets.token_bytes(8)  # 4字节固定IV + 8字节随机
-            
-            cipher = Cipher(algorithms.AES(self.client_write_key), modes.GCM(nonce))
-            encryptor = cipher.encryptor()
-            
-            ciphertext = encryptor.update(plaintext) + encryptor.finalize()
-            
-            # 返回: nonce(12) + ciphertext + tag(16)
-            return nonce + ciphertext + encryptor.tag
+        # 使用AES-GCM加密
+        nonce = self.client_write_iv + secrets.token_bytes(8)  # 4字节固定IV + 8字节随机
+        
+        cipher = Cipher(algorithms.AES(self.client_write_key), modes.GCM(nonce))
+        encryptor = cipher.encryptor()
+        
+        ciphertext = encryptor.update(plaintext) + encryptor.finalize()
+        
+        # 返回: nonce(12) + ciphertext + tag(16)
+        return nonce + ciphertext + encryptor.tag
+    
     def decrypt_message(self, encrypted_data: bytes) -> bytes:
         """解密应用数据"""
         if not self.encryption_enabled or not self.server_write_key:
@@ -1479,9 +1465,10 @@ class CompleteDTLSClient:
         
         try:
             plaintext = message.encode('utf-8')
+            encrypted_data = self.encrypt_message(plaintext)
             
             app_data_record = self.record_layer.create_record(
-                DTLSConstants.APPLICATION_DATA, plaintext)
+                DTLSConstants.APPLICATION_DATA, encrypted_data)
             
             self.socket.send(app_data_record)
             logger.info(f"发送加密消息: {message}")
