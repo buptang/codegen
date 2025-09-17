@@ -160,19 +160,14 @@ class DTLSRecord:
         if hasattr(self, 'cipher_suite') and self.cipher_suite:
             if self.cipher_suite == DTLSConstants.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:
                 # AES-128-CBC + HMAC-SHA1
-                from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-                from cryptography.hazmat.backends import default_backend
-                
+                # 注意：TLS 1.2的CBC模式不使用固定IV，每个记录使用随机IV
                 self.cipher_mode = 'CBC'
-                self.cipher_algorithm = Cipher(
-                    algorithms.AES(client_write_key),
-                    modes.CBC(client_write_iv),
-                    backend=default_backend()
-                )
+                self.cipher_algorithm = "AES-128-CBC"  # 标记为CBC模式，不预设cipher对象
                 logger.info(f"记录层加密已启用 (AES-128-CBC + HMAC-SHA1)")
-                logger.debug(f"加密参数 - 密钥长度: {len(client_write_key)}, IV长度: {len(client_write_iv)}")
+                logger.debug(f"加密参数 - 密钥长度: {len(client_write_key)}")
                 if client_write_mac_key:
                     logger.debug(f"MAC密钥长度: {len(client_write_mac_key)}")
+                logger.debug("CBC模式：每个记录将使用随机IV")
             else:
                 # AES-GCM (默认)
                 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -238,9 +233,9 @@ class DTLSRecord:
         
         # 使用客户端写MAC密钥计算HMAC-SHA1
         if hasattr(self, 'client_write_mac_key') and self.client_write_mac_key:
-            h = hmac.HMAC(self.client_write_mac_key, hashes.SHA1())
-            h.update(mac_data)
-            mac = h.finalize()
+            h = hmac.new(self.client_write_mac_key, mac_data, hashlib.sha1)
+            # MAC data already included in hmac.new()
+            mac = h.digest()
             logger.debug(f"CBC MAC计算: seq={self.sequence_number}, type={content_type}, data_len={len(data)}, mac={mac.hex()[:16]}...")
         else:
             # 如果没有MAC密钥，使用空MAC (不安全，仅用于测试)
@@ -1083,12 +1078,13 @@ class CompleteDTLSClient:
             # AES-128-CBC + HMAC-SHA1
             key_length = 16     # AES-128密钥长度
             mac_length = 20     # HMAC-SHA1密钥长度
-            iv_length = 16      # CBC模式IV长度 (AES块大小)
+            # 注意：TLS 1.1+的CBC模式不使用固定IV，每个记录使用随机IV
             
-            # 密钥材料顺序: client_write_MAC_key + server_write_MAC_key + 
-            #              client_write_key + server_write_key + 
-            #              client_write_IV + server_write_IV
-            key_material_length = 2 * (mac_length + key_length + iv_length)
+            # 密钥材料顺序（RFC 5246）: 
+            # client_write_MAC_key + server_write_MAC_key + 
+            # client_write_key + server_write_key
+            # 注意：没有固定IV！
+            key_material_length = 2 * (mac_length + key_length)
             key_material = self._prf(self.master_secret, seed, key_material_length)
             
             # 分配密钥
@@ -1100,12 +1096,13 @@ class CompleteDTLSClient:
             self.client_write_key = key_material[offset:offset+key_length]
             offset += key_length
             self.server_write_key = key_material[offset:offset+key_length]
-            offset += key_length
-            self.client_write_iv = key_material[offset:offset+iv_length]
-            offset += iv_length
-            self.server_write_iv = key_material[offset:offset+iv_length]
             
-            logger.info(f"CBC密钥材料派生完成 - MAC密钥: {len(self.client_write_mac_key)}字节, 加密密钥: {len(self.client_write_key)}字节, IV: {len(self.client_write_iv)}字节")
+            # CBC模式不使用固定IV
+            self.client_write_iv = None
+            self.server_write_iv = None
+            
+            logger.info(f"CBC密钥材料派生完成 - MAC密钥: {len(self.client_write_mac_key)}字节, 加密密钥: {len(self.client_write_key)}字节")
+            logger.info("CBC模式：每个记录使用随机IV，不派生固定IV")
             
         elif self.cipher_suite == DTLSConstants.TLS_RSA_WITH_AES_128_GCM_SHA256:
             # AES-128-GCM
@@ -1169,17 +1166,13 @@ class CompleteDTLSClient:
             logger.info(f"默认GCM密钥材料派生完成 - 加密密钥: {len(self.client_write_key)}字节, IV: {len(self.client_write_iv)}字节")
     
     def _prf(self, secret: bytes, seed: bytes, length: int) -> bytes:
-        """TLS伪随机函数 - 根据密码套件选择哈希算法"""
+        """TLS 1.2伪随机函数 - 始终使用SHA-256"""
         result = b''
         a = seed
         
-        # 根据密码套件选择哈希算法
-        if hasattr(self, 'cipher_suite') and self.cipher_suite == DTLSConstants.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:
-            # CBC_SHA密码套件使用SHA-1
-            hash_func = hashlib.sha1
-        else:
-            # 其他密码套件使用SHA-256
-            hash_func = hashlib.sha256
+        # TLS 1.2/DTLS 1.2的PRF始终使用SHA-256
+        # 注意：密码套件名称中的SHA指的是MAC算法，不是PRF算法
+        hash_func = hashlib.sha256
         
         while len(result) < length:
             a = hmac.new(secret, a, hash_func).digest()
@@ -1192,14 +1185,9 @@ class CompleteDTLSClient:
     
     def create_finished(self) -> bytes:
         """创建Finished消息"""
-        # 根据密码套件选择哈希算法
-        if self.cipher_suite == DTLSConstants.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:
-            # CBC_SHA密码套件使用SHA-1和MD5的组合（TLS 1.2之前）或SHA-256（TLS 1.2）
-            # 但对于简化，我们使用SHA-1
-            handshake_hash = hashlib.sha1()
-        else:
-            # 其他密码套件使用SHA-256
-            handshake_hash = hashlib.sha256()
+        # TLS 1.2/DTLS 1.2中，所有密码套件都使用SHA-256计算握手哈希
+        # 密码套件名称中的SHA指的是MAC算法，不是握手哈希算法
+        handshake_hash = hashlib.sha256()
             
         for msg in self.handshake_layer.handshake_messages:
             handshake_hash.update(msg)
